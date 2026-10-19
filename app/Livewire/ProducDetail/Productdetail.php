@@ -1,0 +1,104 @@
+<?php
+
+namespace App\Livewire\ProducDetail;
+
+use App\Repositorie\ProduitRepository;
+use App\Models\Produit;
+use Livewire\Component;
+use App\Models\HystoryProduct;
+use Illuminate\Support\Facades\Auth;
+
+class Productdetail extends Component
+{
+    public $data;
+    public $product_id; 
+    public $prix_achat; 
+    public $produit_quantity;
+    public $prix; 
+    public  $commandes; 
+    public $entries ;
+
+    /**
+     * Summary of render
+     * @return \Illuminate\Contracts\View\Factory|\Illuminate\Contracts\View\View
+     */
+ 
+    public function render()
+    {
+     $repo = new ProduitRepository;
+      $this->data =  Produit::findOrFail($this->product_id);
+      $this->entries = $repo->hystory_entrie($this->product_id);
+      //$this->commandes = $repo->hystory_commandes($this->product_id);
+
+        return view('livewire.produc-detail.productdetail');
+    }
+
+    
+    /**
+     * Summary of ajouter
+     * @param int $produitI
+     * @return void
+     */
+    public function ajouter(int $produitI)
+    {
+     
+        $produit = Produit::find($produitI);
+   
+        $old_quantity = $produit->quantity;
+
+        $history =  HystoryProduct::create([
+            'product_id' => $produitI,
+            'new_quantity' => $this->produit_quantity,
+            'old_quantity' => $old_quantity,
+            'prix_achat' => $this->prix_achat,
+            'company_id' => Auth::user()->company_id
+        ]);
+        if ($history) {
+            $updated_quantity = $old_quantity + $this->produit_quantity;
+            $produit->update([
+                'quantity' => $updated_quantity
+            ]);
+            $this->reset_fields();
+            session()->flash('message', 'quantite ajouté avec succès');
+            $this->dispatch('close-modal');
+        }
+    }
+
+
+    /**
+     * Summary of reset_fields
+     * @return void
+     */
+    public function reset_fields()
+    {
+        $this->name = "";
+        $this->categorie_id = "";
+        $this->price = "";
+        $this->produit_quantity = "";
+        $this->product_price = "";
+        $this->prix_achat = "";
+        $this->produit_id = "";
+        $this->prix_vente = "";
+        $this->prix = "";
+    }
+
+
+    /**
+     * Summary of modifier_prix
+     * @param int $id
+     * @return void
+     */
+    public function modifier_prix(int $id){
+       $produit =  Produit::find($id);
+       $produit->update([
+        "price"=>$this->prix
+       ]);
+       $this->reset_fields();
+     session()->flash('message','prix modifier avec succès');
+     $this->reset_fields();
+     $this->dispatchBrowserEvent('close-modal');
+        
+    }
+
+
+}

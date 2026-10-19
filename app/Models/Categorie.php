@@ -1,0 +1,24 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+use App\Utilities\FormatDate;
+
+class Categorie extends Model
+{
+   private $created_at, $updated_at;
+    use HasFactory;
+    
+    protected $fillable = ['name',"company_id"];
+
+    public function produits(){
+        return $this->hasMany(Produit::class);
+    }
+
+    public function user () {
+    return $this->belongsTo(User::class,'user_id','company_id');
+    }
+
+}

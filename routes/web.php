@@ -1,0 +1,117 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\Auth\AuthenticatedSessionController;
+use App\Http\Controllers\CategorieController;
+use App\Http\Controllers\CommandeController;
+use App\Http\Controllers\DepenseController;
+use App\Http\Controllers\HomeController;
+use App\Http\Controllers\PrecommandeController;
+use App\Http\Controllers\ProductController;
+use App\Http\Controllers\RapportController;
+use App\Http\Controllers\ReductionController;
+use App\Http\Controllers\RoleController;
+use App\Http\Controllers\ServerController;
+use App\Http\Controllers\StockController;
+use App\Http\Controllers\SuperAdminController;
+use App\Http\Controllers\TableController;
+use App\Http\Controllers\TauxController;
+use App\Http\Controllers\UserController;
+
+
+/*
+|--------------------------------------------------------------------------
+| Web Routes
+|--------------------------------------------------------------------------
+|
+| Here is where you can register web routes for your application. These
+| routes are loaded by the RouteServiceProvider within a group which
+| contains the "web" middleware group. Now create something great!
+|
+*/
+
+Route::get('/', [AuthenticatedSessionController::class, 'create'])->middleware('guest')
+->name('login');
+
+// Route::middleware('auth')->group(function(){
+//     Route::get('/home',)->name('home');
+// });
+
+// Route::get('/', function () {
+//     return view('login');
+// });
+
+Route::get('/dashboard',[HomeController::class,'index'])->middleware('auth')->name('dashboard');
+Route::middleware(['auth'])->group(function(){
+
+    Route::get('/taux',[TauxController::class,'index'])->name('taux');
+    Route::get('/reduction',[ReductionController::class,'index'])->name('reductions');
+    Route::get('/detail-reduction/{id}',[ReductionController::class,'show'])->name('reduction-detail');
+    Route::get('/commandes',[CommandeController::class,'admin_commande'])->name('admin-commande');
+    Route::get('/produits',[ProductController::class,'index'])->name('products');
+    Route::get('/categories',[CategorieController::class,'index'])->name('categories');
+    Route::get('/depenses',[DepenseController::class,'index'])->name('depenses');
+    Route::get('/tables',[TableController::class,'index'])->name('tables');
+    
+    Route::get('/produit-detail/{id}',[ProductController::class,'show'])->name('product-detail');
+
+    Route::get('/home',[PrecommandeController::class,'index'])->name('commandes');
+
+});
+
+Route::middleware(['admin','auth'])->group(function(){
+
+    Route::get('/commande/{id}',[CommandeController::class,'new'])->name('new_commande');
+    Route::get('/facture/{id}',[HomeController::class,'facture'])->name('facture');
+    Route::get("/rapports",[RapportController::class,'index'])->name('rapports');
+    Route::get("/dailyRapport",[RapportController::class,'daily'])->name('daily-rapport');
+    Route::get("/weeklyRapport",[RapportController::class,'monthly'])->name('weekly-rapport');
+    Route::get("/monthlyRapport",[RapportController::class,'monthly'])->name('monthly-rapport');
+    Route::post("/search",[RapportController::class,'search'])->name('search');
+
+    Route::get('/dailyStock',[StockController::class,'daily'])->name("daily-stock");
+    Route::get('/weeklyStock',[StockController::class,'weekly'])->name("weekly-stock");
+    Route::get('/monthStock',[StockController::class,'monthly'])->name("monthly-stock");
+    
+
+  
+    Route::get('/roles',[RoleController::class,'index'])->name('roles');
+    Route::get('/users',[UserController::class,'index'])->name('users');
+    Route::get('/users-detail/{id}',[UserController::class,'show'])->name('user-detail');
+    Route::post('/updateUser', [UserController::class, 'update'])->name('update.user');
+    Route::post('/users-delete',[UserController::class,'destroy'])->name('user-delete');
+
+});
+
+Route::middleware(['auth', 'superadmin'])->group(function () {
+    Route::get("/superadmin", [SuperAdminController::class, "index"])->name('superadmin.index');
+        Route::get("/activate/{user_id}", [SuperAdminController::class, "activate"])->name('superadmin.activate');
+        Route::get("/deactivate/{user_id}", [SuperAdminController::class, "deactivate"])->name('superadmin.deactivate');
+});
+
+
+/*
+|--------------------------------------------------------------------------
+| Web Routes
+|--------------------------------------------------------------------------
+|
+| Here is where you can register web routes for your application. These
+| routes are loaded by the RouteServiceProvider and all of them will
+| be assigned to the "web" middleware group. Make something great!
+|
+*/
+
+Route::redirect('/', 'login');
+
+Route::middleware(['auth:sanctum', 'verified'])->group(function () {
+
+
+    // Route for the getting the data feed
+    
+
+    Route::get('/dashboard', [HomeController::class, 'index'])->name('dashboard');
+
+
+});

@@ -1,0 +1,30 @@
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Model;
+
+class Commande extends Model
+{
+    use HasFactory;
+
+    protected $fillable = ['user_id','precommande_id','produit_id','quantity_commande','status','reduction', 'company_id'];
+    
+     public function user () {
+    return $this->belongsTo(User::class,'user_id','company_id');
+    }
+
+    public function produit(){
+        return $this->belongsTo(Produit::class);
+    }
+
+    public function precommande(){
+        return $this->belongsTo(Precommande::class);
+    }
+
+    public function reduction(){
+        return $this->hasOneThrough(Reduction::class,Precommande::class,'id','precommande_id');
+        
+    }
+}
