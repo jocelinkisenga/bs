@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\DB;
 class HomeController extends Controller
 {
     public function index(){
+        
         $produits = Produit::all();
         $notifications = Reduction::whereStatus(false)->get();
         return view('pages.index',compact("produits","notifications"));

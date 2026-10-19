@@ -686,7 +686,310 @@ $(document).ready(function(){
 
 });
 
-	
+// categories
+/* =====================================================
+   SELLIT · Catégories
+   Fichier statique chargé une fois par le layout.
+   ===================================================== */
+
+(function () {
+    function getModal() {
+        var el = document.getElementById('categorieModal');
+        return el ? bootstrap.Modal.getOrCreateInstance(el) : null;
+    }
+
+    // Déclenché par $this->dispatch('open-categorie-modal')
+    window.addEventListener('open-categorie-modal', function () {
+        var modal = getModal();
+        if (modal) modal.show();
+
+        // Focus sur le champ après l'ouverture
+        var el = document.getElementById('categorieModal');
+        if (el) {
+            el.addEventListener('shown.bs.modal', function focusOnce() {
+                var input = document.getElementById('categorie-name');
+                if (input) input.focus();
+                el.removeEventListener('shown.bs.modal', focusOnce);
+            });
+        }
+    });
+
+    // Déclenché par $this->dispatch('categorie-saved')
+    window.addEventListener('categorie-saved', function () {
+        var modal = getModal();
+        if (modal) modal.hide();
+    });
+
+    // Confirmation avant suppression, puis appel Livewire
+    window.confirmerSuppressionCategorie = function (button) {
+        var id = Number(button.dataset.id);
+        var nom = button.dataset.name;
+        var root = button.closest('[wire:id]');
+
+        if (!root) return;
+
+        Swal.fire({
+            title: 'Supprimer la catégorie ?',
+            text: '« ' + nom + ' » sera supprimée définitivement.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'Supprimer',
+            cancelButtonText: 'Annuler',
+            confirmButtonColor: '#dc2626',
+            cancelButtonColor: '#64748b'
+        }).then(function (result) {
+            if (!result.isConfirmed) return;
+
+            var component = window.Livewire.find(root.getAttribute('wire:id'));
+            component.call('delete', id);
+        });
+    };
+})();
+
+
+
+
+// products
+/* =====================================================
+   SELLIT · Produits
+   Fichier statique chargé une fois par le layout.
+   ===================================================== */
+
+(function () {
+    var MODAL_ID = 'produitModal';
+    var INPUT_ID = 'produit-name';
+
+    function getModal() {
+        var el = document.getElementById(MODAL_ID);
+        return el ? bootstrap.Modal.getOrCreateInstance(el) : null;
+    }
+
+    // Ouverture du modal (dispatch Livewire : open-produit-modal)
+    window.addEventListener('open-produit-modal', function () {
+        var modal = getModal();
+        if (modal) modal.show();
+    });
+
+    // Fermeture après enregistrement (dispatch Livewire : produit-saved)
+    window.addEventListener('produit-saved', function () {
+        var modal = getModal();
+        if (modal) modal.hide();
+    });
+
+    // Focus sur le champ nom à chaque ouverture
+    document.addEventListener('shown.bs.modal', function (e) {
+        if (e.target.id !== MODAL_ID) return;
+        var input = document.getElementById(INPUT_ID);
+        if (input) input.focus();
+    });
+
+    // Confirmation avant suppression, puis appel Livewire
+    window.confirmerSuppressionProduit = function (button) {
+        var id = Number(button.dataset.id);
+        var nom = button.dataset.name;
+        var root = button.closest('[wire\\:id]');
+
+        if (!root) return;
+
+        Swal.fire({
+            title: 'Supprimer le produit ?',
+            text: '« ' + nom + ' » sera supprimé définitivement.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'Supprimer',
+            cancelButtonText: 'Annuler',
+            confirmButtonColor: '#dc2626',
+            cancelButtonColor: '#64748b'
+        }).then(function (result) {
+            if (!result.isConfirmed) return;
+
+            var component = window.Livewire.find(root.getAttribute('wire:id'));
+            component.call('delete', id);
+        });
+    };
+})();
+
+
+// tables
+/* =====================================================
+   SELLIT · Tables
+   Fichier statique chargé une fois par le layout.
+   ===================================================== */
+
+(function () {
+    var MODAL_ID = 'tableModal';
+    var INPUT_ID = 'table-name';
+
+    function getModal() {
+        var el = document.getElementById(MODAL_ID);
+        return el ? bootstrap.Modal.getOrCreateInstance(el) : null;
+    }
+
+    // Dispatch Livewire : open-table-modal
+    window.addEventListener('open-table-modal', function () {
+        var modal = getModal();
+        if (modal) modal.show();
+    });
+
+    // Dispatch Livewire : table-saved
+    window.addEventListener('table-saved', function () {
+        var modal = getModal();
+        if (modal) modal.hide();
+    });
+
+    // Focus sur le champ nom à chaque ouverture
+    document.addEventListener('shown.bs.modal', function (e) {
+        if (e.target.id !== MODAL_ID) return;
+        var input = document.getElementById(INPUT_ID);
+        if (input) input.focus();
+    });
+
+    // Confirmation avant suppression, puis appel Livewire
+    window.confirmerSuppressionTable = function (button) {
+        var id = Number(button.dataset.id);
+        var nom = button.dataset.name;
+        var root = button.closest('[wire\\:id]');
+
+        if (!root) return;
+
+        Swal.fire({
+            title: 'Supprimer la table ?',
+            text: '« ' + nom + ' » sera supprimée définitivement.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'Supprimer',
+            cancelButtonText: 'Annuler',
+            confirmButtonColor: '#dc2626',
+            cancelButtonColor: '#64748b'
+        }).then(function (result) {
+            if (!result.isConfirmed) return;
+
+            var component = window.Livewire.find(root.getAttribute('wire:id'));
+            component.call('delete', id);
+        });
+    };
+})();
+
+
+//depenses
+/* =====================================================
+   SELLIT · Dépenses
+   Fichier statique chargé une fois par le layout.
+   ===================================================== */
+
+(function () {
+    var MODAL_ID = 'depenseModal';
+    var INPUT_ID = 'dep-montant';
+
+    function getModal() {
+        var el = document.getElementById(MODAL_ID);
+        return el ? bootstrap.Modal.getOrCreateInstance(el) : null;
+    }
+
+    // Dispatch Livewire : open-depense-modal
+    window.addEventListener('open-depense-modal', function () {
+        var modal = getModal();
+        if (modal) modal.show();
+    });
+
+    // Dispatch Livewire : depense-saved
+    window.addEventListener('depense-saved', function () {
+        var modal = getModal();
+        if (modal) modal.hide();
+    });
+
+    // Focus sur le montant à chaque ouverture
+    document.addEventListener('shown.bs.modal', function (e) {
+        if (e.target.id !== MODAL_ID) return;
+        var input = document.getElementById(INPUT_ID);
+        if (input) input.focus();
+    });
+
+    // Confirmation avant suppression, puis appel Livewire
+    window.confirmerSuppressionDepense = function (button) {
+        var id = Number(button.dataset.id);
+        var libelle = button.dataset.label;
+        var root = button.closest('[wire\\:id]');
+
+        if (!root) return;
+
+        Swal.fire({
+            title: 'Supprimer la dépense ?',
+            text: '« ' + libelle + ' » sera supprimée définitivement.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'Supprimer',
+            cancelButtonText: 'Annuler',
+            confirmButtonColor: '#dc2626',
+            cancelButtonColor: '#64748b'
+        }).then(function (result) {
+            if (!result.isConfirmed) return;
+
+            var component = window.Livewire.find(root.getAttribute('wire:id'));
+            component.call('delete', id);
+        });
+    };
+})();
+
+//users
+/* =====================================================
+   SELLIT · Personnel
+   Fichier statique chargé une fois par le layout.
+   ===================================================== */
+
+(function () {
+    var MODAL_ID = 'userModal';
+    var INPUT_ID = 'usr-name';
+
+    function getModal() {
+        var el = document.getElementById(MODAL_ID);
+        return el ? bootstrap.Modal.getOrCreateInstance(el) : null;
+    }
+
+    // Dispatch Livewire : open-user-modal
+    window.addEventListener('open-user-modal', function () {
+        var modal = getModal();
+        if (modal) modal.show();
+    });
+
+    // Dispatch Livewire : user-saved
+    window.addEventListener('user-saved', function () {
+        var modal = getModal();
+        if (modal) modal.hide();
+    });
+
+    // Focus sur le nom à chaque ouverture
+    document.addEventListener('shown.bs.modal', function (e) {
+        if (e.target.id !== MODAL_ID) return;
+        var input = document.getElementById(INPUT_ID);
+        if (input) input.focus();
+    });
+
+    // Confirmation avant suppression, puis appel Livewire
+    window.confirmerSuppressionUser = function (button) {
+        var id = Number(button.dataset.id);
+        var nom = button.dataset.name;
+        var root = button.closest('[wire\\:id]');
+
+        if (!root) return;
+
+        Swal.fire({
+            title: 'Supprimer ce membre ?',
+            text: '« ' + nom + ' » ne pourra plus se connecter.',
+            icon: 'warning',
+            showCancelButton: true,
+            confirmButtonText: 'Supprimer',
+            cancelButtonText: 'Annuler',
+            confirmButtonColor: '#dc2626',
+            cancelButtonColor: '#64748b'
+        }).then(function (result) {
+            if (!result.isConfirmed) return;
+
+            var component = window.Livewire.find(root.getAttribute('wire:id'));
+            component.call('delete', id);
+        });
+    };
+})();
 
 	
 

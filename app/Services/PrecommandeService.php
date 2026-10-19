@@ -20,8 +20,7 @@ class PrecommandeService {
                 'server_id' => $serverId,
                 'gerant_id' => Auth::user()->id,
                 'code' => $code,
-                'table_id' => $tableId,
-                'company_id' => Auth::user()->company_id
+                'table_id' => $tableId
             ]);
             //mise a jour du status de la table
             $this->table->update_table($tableId);

@@ -50,6 +50,7 @@ class Home extends Component
     public $precommande;
 
     protected $listeners = ["reduced" => 'render', 'reduction-confirmed' => 'render'];
+
     public function __construct()
     {
         $this->commande_repo = new CommandeRepositorie;
@@ -63,12 +64,22 @@ class Home extends Component
         $this->detteService = new DetteService;
     }
 
+    /**
+     * Facture de la précommande sous forme de tableau.
+     * Le dépôt renvoie une Collection : on la convertit pour que empty()
+     * et l'accès par index ($invoce[0]) se comportent comme avant.
+     */
+    private function factureLignes(int $precommandeId): array
+    {
+        return $this->commande_repo->facture($precommandeId)->all();
+    }
+
     public function render()
     {
         if ($this->last_commande) {
-            $this->invoce = $this->commande_repo->facture($this->last_commande->id);
+            $this->invoce = $this->factureLignes($this->last_commande->id);
             $this->commandes = $this->commande_repo->all_commandes($this->last_commande->id);
-            $this->companyName = User::where('id','=',Auth::user()->company_id)->get('company_name');
+            $this->companyName = User::where('id', '=', Auth::user()->company_id)->get('company_name');
         }
 
         $this->categories = $this->categoryService->category_with_products();
@@ -79,36 +90,28 @@ class Home extends Component
         $this->tables = $this->tableService->table_with_precommandes();
         $this->serveurs = $this->userService->servers();
 
-
         return view('livewire.home');
     }
 
     //cree une commande
     public function store()
     {
-
         $code = '#' . date('Y-m-d') . rand(1, 1000);
         $table = $this->tableService->table_by_id($this->table_id);
 
-        // if (session()->has($table->name) || (!empty($this->precommande->code) && session()->has($this->precommande->code))) {
-        //     session()->forget($table->name);
-        //     session()->forget($this->precommande->table);
+        //creation de la precommande
+        $this->precommande = $this->precommandeService->store_precommande($this->server_id, $code, $this->table_id);
+        $this->tableService->update_table($this->table_id);
 
-        //  } else {
-            
-            
-            //creation de la precommande
-            $this->precommande = $this->precommandeService->store_precommande($this->server_id, $code, $this->table_id);
-            $this->tableService->update_table($this->table_id);
-            $this->facture = $this->commande_repo->facture($this->precommande->id);
-            $this->last_commande = $this->commande_repo->last_commande($this->precommande->id);
-           flash()->success('Your message has been sent!', [], 'Thank you');
-            Session::put($table->name, $table->name);
-            Session::put($this->precommande->code, $this->precommande->code);
-            $this->vider_commande_form();
-            
-            $this->dispatch('closeModal');
-         // }
+        $this->facture = $this->factureLignes($this->precommande->id);
+        $this->last_commande = $this->commande_repo->last_commande($this->precommande->id);
+
+        flash()->success('Commande créée.', [], 'Succès');
+        Session::put($table->name, $table->name);
+        Session::put($this->precommande->code, $this->precommande->code);
+        $this->vider_commande_form();
+
+        $this->dispatch('closeModal');
     }
 
     // reduction des donnees
@@ -121,56 +124,69 @@ class Home extends Component
     public function ajouter(int $produitId)
     {
         $this->produit_id = $produitId;
-        $produit = $this->commande_repo->produit_by_id($this->produit_id);
 
-        if ($produit and $this->last_commande != null) {
-            $commandeById = $this->commande_repo->commande_by_id($this->last_commande->id, $this->produit_id);
-
-            if (empty($commandeById)) {
-                $this->commande_repo->store_command($this->last_commande->id, $this->produit_id, $this->quantity_commande);
-                $this->facture = $this->commande_repo->facture($this->last_commande->id);
-            } else {
-                $this->commande_repo->update_quantity($this->last_commande->id, $this->produit_id, $this->quantity_commande);
-                $this->facture = $this->commande_repo->facture($this->last_commande->id);
-            }
-        } else {
-
+        if (empty($this->last_commande)) {
+            flash()->warning('Sélectionnez d\'abord une commande.');
+            return;
         }
+
+        $produit = $this->commande_repo->produit_by_id($produitId);
+
+        if (! $produit) {
+            flash()->error('Produit introuvable.');
+            return;
+        }
+
+        $precommandeId = $this->last_commande->id;
+
+        $existe = $this->commande_repo->commande_by_id($precommandeId, $produitId);
+
+        $ok = empty($existe)
+            ? $this->commande_repo->store_command($precommandeId, $produitId, $this->quantity_commande)
+            : $this->commande_repo->update_quantity($precommandeId, $produitId, $this->quantity_commande);
+
+        if (! $ok) {
+            flash()->error('Stock insuffisant pour « ' . $produit->name . ' ».');
+        }
+
+        $this->facture = $this->factureLignes($precommandeId);
     }
 
     //retranche la quantite des produits de la commande
-    public function reduire($orderId, $productId)
+    public function reduire(int $orderId, int $productId)
     {
-        $this->commande_repo->reduire_quantity($orderId, $productId);
-        $this->facture = $this->commande_repo->facture($orderId);
+        if (! $this->commande_repo->reduire_quantity($orderId, $productId)) {
+            flash()->warning('Ce produit n\'est pas dans la commande.');
+        }
+
+        $this->facture = $this->factureLignes($orderId);
     }
 
     //annule efface le produit de la commande
-    public function annuler($commandId, $produitId, $quantity)
+    public function annuler(int $commandId, int $produitId)
     {
-        $result = $this->commande_repo->delete_commande($commandId, $produitId, $quantity);
-        $this->facture = $this->commande_repo->facture($commandId);
+        if (! $this->commande_repo->delete_commande($commandId, $produitId)) {
+            flash()->warning('Ligne introuvable dans la commande.');
+        }
+
+        $this->facture = $this->factureLignes($commandId);
     }
 
     //confirme la reduction de la facture
     public function reduction_facture($commandeId)
     {
-        return $this->facture = $this->commande_repo->facture($commandeId);
-        $this->emit('reduced');
+        return $this->facture = $this->factureLignes($commandeId);
     }
 
     //selectionne la commande pour y ajouter des produits
     public function edit(int $id)
     {
-
         if ($id !== 0) {
-            $this->facture = $this->commande_repo->facture($id);
+            $this->facture = $this->factureLignes($id);
             return $this->last_commande = $this->commande_repo->last_commande($id);
-            // $this->emit('categorieStore');
-            $this->dispatch('close-modal');
-        } else {
-            dd("commandes n'existe pas");
         }
+
+        flash()->error('Cette commande n\'existe pas.');
     }
 
     //confirme la commande et genere une facture
@@ -183,7 +199,7 @@ class Home extends Component
     public function confirmer(int $id)
     {
         $this->commande_repo->confirm($id);
-        $this->facture = $this->commande_repo->facture($id);
+        $this->facture = $this->factureLignes($id);
         $this->last_commande = 0;
         $this->dispatch('close-modal');
     }
@@ -192,17 +208,17 @@ class Home extends Component
     public function confirm_reduction(int $id)
     {
         $precommande_id = $this->reduction_repo->confirm($id);
-        return $this->facture = $this->commande_repo->facture($precommande_id);
-        $this->emit("reduction-confirmed");
+        return $this->facture = $this->factureLignes($precommande_id);
     }
 
-    public function storeDette($precommandeId) {
-        
-       $detteOkay = $this->detteService->store_dette($this->clientName, $this->clientPhone, $this->advance, $precommandeId);
-        
-       if($detteOkay === true) {
-        $this->facture = $this->commande_repo->facture($precommandeId);
-       }
+    public function storeDette($precommandeId)
+    {
+        $detteOkay = $this->detteService->store_dette($this->clientName, $this->clientPhone, $this->advance, $precommandeId);
+
+        if ($detteOkay === true) {
+            $this->facture = $this->factureLignes($precommandeId);
+        }
+
         $this->dispatch('closeModal');
     }
 

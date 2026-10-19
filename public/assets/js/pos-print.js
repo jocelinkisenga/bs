@@ -64,3 +64,6 @@ function imprimerTicketCaisse() {
 
     window.print();
 }
+
+
+// categoties

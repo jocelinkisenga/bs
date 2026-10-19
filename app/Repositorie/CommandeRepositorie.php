@@ -2,215 +2,291 @@
 
 namespace App\Repositorie;
 
-use App\Models\Produit;
-use App\Models\Precommande;
 use App\Models\Commande;
+use App\Models\Precommande;
+use App\Models\Produit;
 use App\Models\Reduction;
 use App\Models\Table;
-use Illuminate\Contracts\Session\Session;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 
 class CommandeRepositorie
 {
-        //returns commande by id
-        public function produit_by_id(int $produitId)
-        {
-                return Produit::whereId($produitId)->where("company_id", "=", Auth::user()->company_id)->first();
+    /* ==========================================================
+     |  Outils internes (toujours filtrés par entreprise)
+     ========================================================== */
+
+    private function companyId(): int
+    {
+        return Auth::user()->id;
+    }
+
+    /** Valide une quantité : entier strictement positif. */
+    private function assertQuantite(mixed $quantite): int
+    {
+        if (filter_var($quantite, FILTER_VALIDATE_INT) === false || (int) $quantite < 1) {
+            throw new \InvalidArgumentException('La quantité doit être un entier supérieur à 0.');
         }
 
-        //returns all precommandes
-        public function all_precommandes()
-        {
-                return Precommande::latest()->whereStatus(false)->where("company_id", "=", Auth::user()->company_id)->get();
-        }
-        public function today_commandes()
-        {
-                return Precommande::where();
-        }
+        return (int) $quantite;
+    }
 
-        //returns all 
-        public function all_commandes($code)
-        {
-                return Commande::wherePrecommande_id($code)->where("company_id", "=", Auth::user()->company_id)->whereStatus(false)->with('produit')->get();
-        }
+    private function produitPourEntreprise(int $produitId): Produit
+    {
+        return Produit::findOrFail($produitId);
+    }
 
-        public function commande_by_id(int $commandId, int $produitId)
-        {
-                return $result = Commande::wherePrecommande_id($commandId)->whereProduit_id($produitId)->whereCompany_id(Auth::user()->company_id)->first();
-        }
+    private function precommandePourEntreprise(int $precommandeId): Precommande
+    {
+        return Precommande::findOrFail($precommandeId);
+    }
 
-        //THIS FUNCTION UPDATES COMMANDES QUANTITY BY PRODUCT ID AND COMMAND ID
-        public function update_quantity(int $commandId, int $produitId, $quantity)
-        {
+    /** Ligne de commande de l'entreprise. Verrou optionnel pour les écritures. */
+    private function ligne(int $precommandeId, int $produitId, bool $verrou = false): ?Commande
+    {
+        $requete = Commande::where('company_id', $this->companyId())
+            ->where('precommande_id', $precommandeId)
+            ->where('produit_id', $produitId);
 
-                if ($quantity < $this->product_qty($produitId)) {
-                        $result = Commande::wherePrecommande_id($commandId)->whereCompany_id(Auth::user()->company_id)->where('produit_id', '=', $produitId)->first();
-                        if (!empty($result)) {
-                                $Oldqty = $result->quantity_commande;
-                                $new_qty = $Oldqty + $quantity;
+        return ($verrou ? $requete->lockForUpdate() : $requete)->first();
+    }
 
-                                $result->update([
-                                        "quantity_commande" => $new_qty
-                                ]);
+    /**
+     * Retire du stock de façon atomique.
+     * La condition et la mise à jour sont dans une seule requête SQL,
+     * donc deux ventes simultanées ne peuvent pas dépasser le stock.
+     */
+    private function retirerStock(int $produitId, int $quantite): bool
+    {
+        return Produit::where('id', $produitId)
+            ->where('quantity', '>=', $quantite)
+            ->decrement('quantity', $quantite) > 0;
+    }
 
-                                $this->substract_quantity($produitId, $quantity);
-                        }
-                } else {
-                        session()->flash('message', 'vous n\'avez plus bcp des produits');
+    private function remettreStock(int $produitId, int $quantite): void
+    {
+        Produit::where('id', $produitId)
+            ->increment('quantity', $quantite);
+    }
+
+    /* ==========================================================
+     |  Produits
+     ========================================================== */
+
+    public function produit_by_id(int $produitId): ?Produit
+    {
+        return Produit::where('id', $produitId)
+            ->first();
+    }
+
+    public function product_qty(int $produitId): int
+    {
+        return (int) $this->produitPourEntreprise($produitId)->quantity;
+    }
+
+    /** Décrémente le stock. Retourne false si le stock est insuffisant. */
+    public function substract_quantity(int $produitId, $quantity): bool
+    {
+        return $this->retirerStock($produitId, $this->assertQuantite($quantity));
+    }
+
+    /** Remet du stock (annulation ou réduction de commande). */
+    public function restore_product(int $produitId, $quantity): void
+    {
+        $this->remettreStock($produitId, $this->assertQuantite($quantity));
+    }
+
+    /* ==========================================================
+     |  Précommandes
+     ========================================================== */
+
+    public function all_precommandes()
+    {
+        return Precommande::where('company_id', $this->companyId())
+            ->where('status', false)
+            ->latest()
+            ->get();
+    }
+
+    public function last_commande(int $precommandeId)
+    {
+        return Precommande::where('status', false)
+            ->whereKey($precommandeId)
+            ->with('reductions')
+            ->first();
+    }
+
+    /** Confirme la commande et libère la table, dans une seule transaction. */
+    public function confirm(int $precommandeId): void
+    {
+        DB::transaction(function () use ($precommandeId) {
+            $precommande = Precommande::lockForUpdate()
+                ->findOrFail($precommandeId);
+
+            $precommande->update(['status' => true]);
+
+            // Une vente à emporter n'a pas de table
+            if ($precommande->table_id) {
+                $table = Table::find($precommande->table_id);
+
+                if ($table) {
+                    $table->update(['status' => false]);
+                    session()->forget($table->name);
                 }
-        }
+            }
+        });
+    }
 
-        //this function creates a new command
-        public function store_command($commande, int $produitId, $quantity)
-        {
-                if ($quantity < $this->product_qty($produitId)) {
+    /* ==========================================================
+     |  Lignes de commande
+     ========================================================== */
 
-                        Commande::create([
-                                'precommande_id' => $commande,
-                                "produit_id" => $produitId,
-                                "quantity_commande" => $quantity,
-                                "company_id" => Auth::user()->company_id
-                        ]);
-                        $this->substract_quantity($produitId, $quantity);
-                } else {
-                        session()->flash('message', 'vous n\'avez plus bcp des produits');
-                }
-        }
+    public function all_commandes(int $precommandeId)
+    {
+        return Commande::where('precommande_id', $precommandeId)
+            ->whereHas('precommande', fn ($q) => $q->where('status', false))
+            ->with('produit')
+            ->get();
+    }
 
-        public function commande_by_product($commandId)
-        {
-                return Commande::where('precommande_id', '=', $commandId)
-                        ->join('produits', 'commandes.produit_id', '=', 'produits.id')
-                        ->get(['commandes.*', 'produits.name', 'produits.id as pId']);
-        }
+    public function commande_by_id(int $precommandeId, int $produitId): ?Commande
+    {
+        return $this->ligne($precommandeId, $produitId);
+    }
 
-        //this function updates product quantity by substracting it 
-        public function substract_quantity($productId, $quantity)
-        {
-                $result = Produit::where('id', '=', $productId)->first();
-                if (!empty($result)) {
-                        $qty = $result->quantity;
-                        if ($qty >= $quantity) {
-                                $new_qty = $qty - $quantity;
+    public function commande_by_product(int $precommandeId)
+    {
+        return Commande::where('commandes.precommande_id', $precommandeId)
+            ->join('produits', 'commandes.produit_id', '=', 'produits.id')
+            ->get(['commandes.*', 'produits.name', 'produits.id as pId']);
+    }
 
-                                $result->update([
-                                        "quantity" => $new_qty
-                                ]);
-                        }
-                }
-        }
+    /**
+     * Crée une ligne de commande et décrémente le stock, dans une transaction.
+     * Retourne false si le stock est insuffisant (rien n'est enregistré).
+     */
+    public function store_command(int $precommandeId, int $produitId, $quantity): bool
+    {
+        $quantite = $this->assertQuantite($quantity);
+        $this->precommandePourEntreprise($precommandeId);
 
-        // diminue la quatinté des produits d'une commande
-        public function reduire_quantity(int $commandId, int $produitId)
-        {
-                $result = Commande::wherePrecommande_id($commandId)->whereCompany_id(Auth::user()->company_id)->whereProduit_id($produitId)->first();
-                if (!empty($result)) {
-                        $new_qty = $result->quantity_commande - 1;
-                        $this->restore_product($produitId, 1);
-                        $result->update([
-                                'quantity_commande' => $new_qty
-                        ]);
-                }
-        }
+        return DB::transaction(function () use ($precommandeId, $produitId, $quantite) {
+            if (! $this->retirerStock($produitId, $quantite)) {
+                return false;
+            }
 
-        //annule une commande
-        public function delete_commande(int $commandId, int $produitId, $qty)
-        {
-                $result = Commande::wherePrecommande_id($commandId)->whereCompany_id(Auth::user()->company_id)->where('produit_id', '=', $produitId)->first();
-                if (!empty($result)) {
-                        $this->restore_product($produitId, $qty);
-                        $result->delete();
-                }
-        }
+            Commande::create([
+                'precommande_id'    => $precommandeId,
+                'produit_id'        => $produitId,
+                'quantity_commande' => $quantite
+            ]);
 
-        // mets à jour la quantité des produits après reduction ou annulation de la commande
-        public function restore_product($productId, $quantity)
-        {
-                $result = Produit::whereId($productId)->first();
-                if (!empty($result)) {
-                        $qty = $result->quantity;
-                        if ($qty >= $quantity) {
-                                $new_qty = $qty + $quantity;
+            return true;
+        });
+    }
 
-                                $result->update([
-                                        "quantity" => $new_qty
-                                ]);
-                        }
-                }
-        }
+    /** Ajoute une quantité à une ligne existante. Retourne false si le stock est insuffisant. */
+    public function update_quantity(int $precommandeId, int $produitId, $quantity): bool
+    {
+        $quantite = $this->assertQuantite($quantity);
 
-        // retourne la quantité des produits
-        public function product_qty($productId)
-        {
-                $produit = Produit::whereId($productId)->first();
-                return $produit->quantity;
-        }
+        return DB::transaction(function () use ($precommandeId, $produitId, $quantite) {
+            $ligne = $this->ligne($precommandeId, $produitId, true);
 
-        //retourne la facture
-        public function facture($commandId)
-        {
+            if (! $ligne || ! $this->retirerStock($produitId, $quantite)) {
+                return false;
+            }
 
-                DB::statement("SET SQL_MODE=''");
+            $ligne->increment('quantity_commande', $quantite);
 
-                $facture = DB::select("SELECT SUM(commandes.quantity_commande) as qty,
-                reductions.pourcentage,
-                produits.name, 
-                produits.price,
-                produits.id as produit_id, 
-                precommandes.created_at, 
-                precommandes.id as pId,
-                precommandes.invoiced,
-                 precommandes.code 
-                FROM commandes
-                INNER JOIN precommandes ON commandes.precommande_id = precommandes.id
-                INNER JOIN produits ON commandes.produit_id = produits.id 
-                LEFT JOIN reductions ON  reductions.precommande_id = precommandes.id
-                WHERE precommandes.id = ?
-                GROUP BY produit_id, produits.name,
-                 produits.price,
-                 reductions.pourcentage, 
-                 precommandes.created_at, 
-                 precommandes.id, 
-                 precommandes.invoiced, 
-                 precommandes.code
-                ", [$commandId]);
+            return true;
+        });
+    }
 
-               return $facture;
-        }
+    /** Retire une unité. La ligne est supprimée si la quantité atteint 0. */
+    public function reduire_quantity(int $precommandeId, int $produitId): bool
+    {
+        return DB::transaction(function () use ($precommandeId, $produitId) {
+            $ligne = $this->ligne($precommandeId, $produitId, true);
 
-        // retourne la dernière commande
-        public function last_commande($precommandeId)
-        {
-                return Precommande::whereId($precommandeId)
-                        ->whereStatus(false)
-                        ->whereCompany_id(Auth::user()->company_id)
-                        ->with('reductions')->first();
-        }
+            if (! $ligne) {
+                return false;
+            }
 
-        // confirme la commande
-        public function confirm(int $id)
-        {
-                $precommande = Precommande::where('id', '=', $id)->first();
-                $table = Table::findOrFail($precommande->table_id);
+            $this->remettreStock($produitId, 1);
 
-                $table->update([
-                        "status" => false
-                ]);
-                $precommande->update([
-                        'status' => true
-                ]);
-                session()->forget($table->name);
-        }
+            if ((int) $ligne->quantity_commande <= 1) {
+                $ligne->delete();
+            } else {
+                $ligne->decrement('quantity_commande');
+            }
 
-        public function todays()
-        {
-                DB::statement("SET SQL_MODE=''");
-                return DB::select("SELECT commandes.*, precommandes.code, produits.name, produits.price
-         FROM commandes,produits, precommandes
-          WHERE DATE(commandes.created_at) = DATE(CURRENT_TIMESTAMP) 
-          AND produits.id = commandes.produit_id
-          AND precommandes.id = precommande_id
-         GROUP BY produit_id");
-        }
+            return true;
+        });
+    }
+
+    /** Annule une ligne et restitue son stock. La quantité vient de la base. */
+    public function delete_commande(int $precommandeId, int $produitId): bool
+    {
+        return DB::transaction(function () use ($precommandeId, $produitId) {
+            $ligne = $this->ligne($precommandeId, $produitId, true);
+
+            if (! $ligne) {
+                return false;
+            }
+
+            $this->remettreStock($produitId, (int) $ligne->quantity_commande);
+            $ligne->delete();
+
+            return true;
+        });
+    }
+
+    /* ==========================================================
+     |  Factures et rapports
+     ========================================================== */
+
+    /**
+     * Lignes de facture regroupées par produit.
+     * La réduction est agrégée dans une sous-requête pour ne pas multiplier les quantités.
+     */
+    public function facture(int $precommandeId)
+    {
+        $reductions = Reduction::query()
+            ->selectRaw('precommande_id, MAX(pourcentage) AS pourcentage')
+            ->groupBy('precommande_id');
+
+        return DB::table('commandes as c')
+            ->join('precommandes as p', 'p.id', '=', 'c.precommande_id')
+            ->join('produits as pr', 'pr.id', '=', 'c.produit_id')
+            ->leftJoinSub($reductions, 'r', 'r.precommande_id', '=', 'p.id')
+            ->where('p.id', $precommandeId)
+            ->groupBy('pr.id', 'pr.name', 'pr.price', 'r.pourcentage', 'p.id', 'p.created_at', 'p.invoiced', 'p.code')
+            ->get([
+                DB::raw('SUM(c.quantity_commande) AS qty'),
+                'r.pourcentage',
+                'pr.name',
+                'pr.price',
+                'pr.id AS produit_id',
+                'p.created_at',
+                'p.id AS pId',
+                'p.invoiced',
+                'p.code',
+            ]);
+    }
+
+    /** Quantités vendues aujourd'hui, par produit, pour l'entreprise. */
+    public function todays()
+    {
+        return DB::table('commandes as c')
+            ->join('produits as pr', 'pr.id', '=', 'c.produit_id')
+            ->whereDate('c.created_at', today())
+            ->groupBy('c.produit_id', 'pr.name', 'pr.price')
+            ->get([
+                'c.produit_id',
+                'pr.name',
+                'pr.price',
+                DB::raw('SUM(c.quantity_commande) AS quantity_commande'),
+            ]);
+    }
 }

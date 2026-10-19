@@ -131,9 +131,11 @@
                     </div>
 
                     <div class="tabs_container">
+                        
                         @foreach ($categories as $item)
                             <div class="tab_content active" data-tab="{{ $item->id }}">
                                 <div class="row row-cols-2 row-cols-sm-3 row-cols-xl-4 g-2 g-md-3">
+
                                     @foreach (Produit::whereCategorie_id($item->id)->get() as $produit)
                                         <div class="col pos-product" data-name="{{ Str::lower($produit->name) }}">
                                             <div class="pos-card {{ $produit->quantity <= 0 ? 'is-out' : '' }}"
