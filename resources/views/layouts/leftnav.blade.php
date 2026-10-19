@@ -10,7 +10,7 @@
           <a href="{{route('dashboard')}}" ><img src="{{asset('assets/img/icons/dashboard.svg')}}" alt="img"><span> Dashboard</span> </a>
         </li>
          <li class="">
-          <a href="{{route('home')}}" ><img src="{{asset('assets/img/icons/dashboard.svg')}}" alt="img"><span> POS</span> </a>
+          <a href="/home" ><img src="{{asset('assets/img/icons/dashboard.svg')}}" alt="img"><span> POS</span> </a>
         </li>
 
         <li class="submenu">
