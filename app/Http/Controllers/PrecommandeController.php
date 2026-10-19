@@ -12,6 +12,6 @@ class PrecommandeController extends Controller
     {
         $categories = Categorie::all();
         $produits = Produit::all();
-        return view("Pages.home",compact('categories','produits'));
+        return view("pages.home",compact('categories','produits'));
     }
 }
