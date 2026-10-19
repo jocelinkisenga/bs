@@ -204,7 +204,7 @@ class CommandeRepositorie
 
         public function todays()
         {
-                // DB::statement("SET SQL_MODE=''");
+                DB::statement("SET SQL_MODE=''");
                 return DB::select("SELECT commandes.*, precommandes.code, produits.name, produits.price
          FROM commandes,produits, precommandes
           WHERE DATE(commandes.created_at) = DATE(CURRENT_TIMESTAMP) 
