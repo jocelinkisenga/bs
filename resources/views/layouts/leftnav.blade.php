@@ -9,6 +9,10 @@
         <li class="active">
           <a href="{{route('dashboard')}}" ><img src="{{asset('assets/img/icons/dashboard.svg')}}" alt="img"><span> Dashboard</span> </a>
         </li>
+         <li class="">
+          <a href="{{route('home')}}" ><img src="{{asset('assets/img/icons/dashboard.svg')}}" alt="img"><span> POS</span> </a>
+        </li>
+
         <li class="submenu">
           <a><img src="{{asset('assets/img/icons/product.svg')}}" alt="img"><span> catégories</span><span class="menu-arrow"></span></a>
           <ul>
