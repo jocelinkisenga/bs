@@ -151,6 +151,7 @@ class CommandeRepositorie
         public function facture($commandId)
         {
 
+                DB::statement("SET SQL_MODE=''");
 
                 $facture = DB::select("SELECT SUM(commandes.quantity_commande) as qty,
                 reductions.pourcentage,
