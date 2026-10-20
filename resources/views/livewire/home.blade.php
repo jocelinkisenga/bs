@@ -17,11 +17,11 @@
 
             {{-- Notifications --}}
             <div class="dropdown">
-                <button class="pos-icon-btn dropdown-toggle" type="button"
+{{--                 <button class="pos-icon-btn dropdown-toggle" type="button"
                     data-bs-toggle="dropdown" aria-expanded="false" aria-label="Notifications">
                     <i class="bi bi-bell"></i>
                     <span class="pos-badge"><livewire:components.reduced></span>
-                </button>
+                </button> --}}
 
                 <div class="dropdown-menu dropdown-menu-end pos-notifications">
                     <div class="pos-dd-head">
@@ -62,12 +62,12 @@
             <div class="dropdown">
                 <button class="pos-avatar-btn dropdown-toggle" type="button"
                     data-bs-toggle="dropdown" aria-expanded="false" aria-label="Profil">
-                    <img src="assets/img/profiles/avator1.jpg" alt="" class="pos-avatar">
+                    <img src="{{asset('asset/dist/img/avatar.png')}}" alt="" class="pos-avatar">
                 </button>
 
                 <div class="dropdown-menu dropdown-menu-end pos-profile">
                     <div class="pos-profile__head">
-                        <img src="assets/img/profiles/avator1.jpg" alt="" class="pos-avatar">
+                        <img src="{{asset('asset/dist/img/avatar.png')}}" alt="" class="pos-avatar">
                         <div>
                             <strong>{{ Auth::user()->name }}</strong>
                             <small>Administrateur</small>
@@ -77,9 +77,9 @@
                     <a class="dropdown-item" href="{{ route('dashboard') }}">
                         <i class="bi bi-speedometer2"></i> Tableau de bord
                     </a>
-                    <a class="dropdown-item" href="">
+{{--                     <a class="dropdown-item" href="">
                         <i class="bi bi-gear"></i> Paramètres
-                    </a>
+                    </a> --}}
 
                     <div class="dropdown-divider"></div>
 

@@ -41,6 +41,9 @@
             'liens' => [
                 ['route' => 'users', 'icone' => 'bi-people', 'libelle' => 'Personnel'],
             ],
+             'liens' => [
+                ['route' => 'profile', 'icone' => 'bi-settings', 'libelle' => 'Profile'],
+            ],
         ],
     ];
 @endphp

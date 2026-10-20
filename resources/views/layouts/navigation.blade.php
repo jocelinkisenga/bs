@@ -56,9 +56,9 @@
     
       <!-- Notifications -->
       <li class="nav-item dropdown">
-        <a href="javascript:void(0);" class="dropdown-toggle nav-link" data-bs-toggle="dropdown">
+{{--         <a href="javascript:void(0);" class="dropdown-toggle nav-link" data-bs-toggle="dropdown">
           <img src="{{asset('assets/img/icons/notification-bing.svg')}}"   alt="img"> <span class="badge rounded-pill">@if(Auth::user()->role_id == RoleEnum::ADMIN){{Reduction::whereStatus(false)->count()}}@endif</span>
-        </a>
+        </a> --}}
         <div class="dropdown-menu notifications">
           <div class="topnav-dropdown-header">
             <span class="notification-title">Notifications</span>

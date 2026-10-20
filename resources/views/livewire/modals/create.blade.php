@@ -13,7 +13,7 @@
                         <div class="col-lg-6 col-sm-12 col-12">
                             <form wire:submit.prevent="store()">
                                 <div class="form-group">
-                                    <label for="">SELECTIONNER UN SERVEUR :</label>
+                                    <label for="">SELECTIONNER UN  SANVANT :</label>
                                     <select class="form-control" wire:model.defer="server_id" id="">
                                         <option selected>selectionner un serveur</option>
                                         @foreach ($serveurs as $item)
@@ -35,7 +35,7 @@
 
                     </div>
                     <div class="col-lg-12">
-                        <button class="btn btn-submit me-2 ">créer la commande</button>
+                        <button class="btn btn-primary me-2 ">créer la commande</button>
                     </div>
                     </form>
                     {{-- onclick="Swal.fire(

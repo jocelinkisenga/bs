@@ -62,7 +62,7 @@ Route::middleware(['auth'])->group(function(){
 });
 
 Route::middleware(['admin','auth'])->group(function(){
-
+Route::get('/profil', fn () => view('pages.profile'))->name('profile');
     Route::get('/commande/{id}',[CommandeController::class,'new'])->name('new_commande');
     Route::get('/facture/{id}',[HomeController::class,'facture'])->name('facture');
     Route::get("/rapports",[RapportController::class,'index'])->name('rapports');

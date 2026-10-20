@@ -1,6 +1,6 @@
                     <div class="p-3 ml-4  bg-white border border-primary shadow-sm col-lg-4 col-sm-12 rounded-2xl">
                         <div class="col-12">
-                            <a href="javascript:void(0);" class="btn btn-adds" data-bs-toggle="modal"
+                            <a href="javascript:void(0);" class="btn btn-adds text-primary border-primary hover-btn-primary" data-bs-toggle="modal"
                                 data-bs-target="#create"><i class="fa fa-plus me-2"></i>créer une commande</a>
                         </div>
                         <div class="setvaluecash">
