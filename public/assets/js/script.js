@@ -995,3 +995,204 @@ $(document).ready(function(){
 
 
 
+
+
+// dashboard
+/* =====================================================
+   SELLIT · Tableau de bord financier (graphiques)
+   Chart.js doit être chargé avant ce fichier.
+   ===================================================== */
+
+(function () {
+    var ROOT_ID = 'rv-root';
+    var DATA_ID = 'rv-data';
+
+    var charts = {};
+    var derniere = null;
+    var enAttente = false;
+    var brancheLivewire = false;
+
+    var C = {
+        primary: '#4f46e5',
+        cr: '#b45309',
+        dep: '#dc2626',
+        ink: '#64748b',
+        grid: '#eef2f7',
+        faible: 'rgba(79, 70, 229, .25)'
+    };
+    var PALETTE = ['#4f46e5', '#06b6d4', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+
+    function el(id) { return document.getElementById(id); }
+
+    function fc(n) { return Number(n).toLocaleString('fr-FR') + ' Fc'; }
+
+    function axes() {
+        return {
+            x: { grid: { display: false }, ticks: { color: C.ink } },
+            y: { grid: { color: C.grid }, ticks: { color: C.ink } }
+        };
+    }
+
+    function detruire(cle) {
+        if (charts[cle]) {
+            charts[cle].destroy();
+            delete charts[cle];
+        }
+    }
+
+    function lire() {
+        var node = el(DATA_ID);
+        if (!node) return null;
+        try {
+            return JSON.parse(node.getAttribute('data-charts'));
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function dessiner(d) {
+        if (typeof Chart === 'undefined') {
+            console.warn('Chart.js n\'est pas chargé.');
+            return;
+        }
+
+        /* Évolution : CA net, créances, dépenses */
+        detruire('evolution');
+        if (el('rv-evolution')) {
+            charts.evolution = new Chart(el('rv-evolution'), {
+                type: 'line',
+                data: {
+                    labels: d.evolution.labels,
+                    datasets: [
+                        {
+                            label: 'CA net', data: d.evolution.net,
+                            borderColor: C.primary, backgroundColor: 'rgba(79, 70, 229, .10)',
+                            fill: true, tension: .35, pointRadius: 2, borderWidth: 2.5
+                        },
+                        {
+                            label: 'Créances', data: d.evolution.cr,
+                            borderColor: C.cr, tension: .35, pointRadius: 0, borderWidth: 2
+                        },
+                        {
+                            label: 'Dépenses', data: d.evolution.dep,
+                            borderColor: C.dep, borderDash: [6, 4], tension: .35, pointRadius: 0, borderWidth: 2
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 8 } },
+                        tooltip: {
+                            callbacks: {
+                                label: function (c) { return c.dataset.label + ' : ' + fc(c.parsed.y); }
+                            }
+                        }
+                    },
+                    scales: axes()
+                }
+            });
+        }
+
+        /* CA net par jour de semaine : le meilleur jour est mis en avant */
+        detruire('jours');
+        if (el('rv-jours')) {
+            var max = Math.max.apply(null, d.jours.values.concat([0]));
+            charts.jours = new Chart(el('rv-jours'), {
+                type: 'bar',
+                data: {
+                    labels: d.jours.labels,
+                    datasets: [{
+                        label: 'CA net',
+                        data: d.jours.values,
+                        borderRadius: 8,
+                        backgroundColor: d.jours.values.map(function (v) {
+                            return v === max && v > 0 ? C.primary : C.faible;
+                        })
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { callbacks: { label: function (c) { return fc(c.parsed.y); } } }
+                    },
+                    scales: axes()
+                }
+            });
+        }
+
+        /* Top 5 produits */
+        detruire('produits');
+        if (el('rv-produits') && d.produits.labels.length) {
+            charts.produits = new Chart(el('rv-produits'), {
+                type: 'bar',
+                data: {
+                    labels: d.produits.labels,
+                    datasets: [{
+                        label: 'CA brut',
+                        data: d.produits.values,
+                        backgroundColor: PALETTE,
+                        borderRadius: 8
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: { callbacks: { label: function (c) { return fc(c.parsed.x); } } }
+                    },
+                    scales: axes()
+                }
+            });
+        }
+    }
+
+    function mettreAJour() {
+        enAttente = false;
+
+        var donnees = lire();
+        if (!donnees) return;
+
+        var signature = JSON.stringify(donnees);
+        if (signature === derniere) return;
+
+        derniere = signature;
+        dessiner(donnees);
+    }
+
+    function planifier() {
+        if (enAttente) return;
+        enAttente = true;
+        requestAnimationFrame(mettreAJour);
+    }
+
+    function brancherLivewire() {
+        if (brancheLivewire || !window.Livewire || typeof window.Livewire.hook !== 'function') {
+            return false;
+        }
+
+        brancheLivewire = true;
+
+        window.Livewire.hook('morph.updated', function (payload) {
+            var root = el(ROOT_ID);
+            if (root && payload && payload.el && root.contains(payload.el)) {
+                planifier();
+            }
+        });
+
+        return true;
+    }
+
+    document.addEventListener('livewire:init', brancherLivewire);
+
+    document.addEventListener('DOMContentLoaded', function () {
+        brancherLivewire();
+        planifier();
+    });
+})();

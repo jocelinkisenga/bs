@@ -32,8 +32,8 @@
             'liens' => [
                 ['route' => 'depenses', 'icone' => 'bi-wallet2',         'libelle' => 'Dépenses'],
                 ['route' => 'rapports', 'icone' => 'bi-bar-chart-line',  'libelle' => 'Rapports'],
-                // Réductions : désactivé comme dans l'original
-                // ['route' => 'reductions', 'icone' => 'bi-percent', 'libelle' => 'Réductions'],
+               // Réductions : désactivé comme dans l'original
+               // ['route' => 'reductions', 'icone' => 'bi-percent', 'libelle' => 'Réductions'],
             ],
         ],
         [

@@ -102,8 +102,7 @@ class CommandeRepositorie
 
     public function all_precommandes()
     {
-        return Precommande::where('company_id', $this->companyId())
-            ->where('status', false)
+        return Precommande::where('status', false)
             ->latest()
             ->get();
     }

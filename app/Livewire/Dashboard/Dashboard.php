@@ -3,37 +3,33 @@
 namespace App\Livewire\Dashboard;
 
 use App\Enums\RoleEnum;
-use App\Models\Categorie;
-use App\Models\Commande;
-use App\Models\Depense;
-use App\Models\HystoryProduct;
-use App\Models\Precommande;
-use App\Models\Produit;
-use App\Models\Reduction;
-use App\Models\User;
+use App\Repositorie\DashboardRepositorie;
 use Carbon\Carbon;
 use Carbon\CarbonPeriod;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Schema;
 use Livewire\Component;
 
 class Dashboard extends Component
 {
-    public string $periode = '30j'; // 7j | 30j | 12m
+    public string $periode = '30j';
+
+    private const PERIODES = ['jour', '7j', '30j', '12m'];
+
+    private const JOURS = [
+        1 => 'Lundi', 2 => 'Mardi', 3 => 'Mercredi', 4 => 'Jeudi',
+        5 => 'Vendredi', 6 => 'Samedi', 7 => 'Dimanche',
+    ];
 
     public function mount(): void
     {
-        abort_unless(
-            in_array(Auth::user()->role_id, [RoleEnum::ADMIN, RoleEnum::GERANT]),
-            403
-        );
+        abort_unless(in_array(Auth::user()->role_id, [RoleEnum::ADMIN, RoleEnum::GERANT]), 403);
     }
 
     public function updatedPeriode(): void
     {
-        if (! in_array($this->periode, ['7j', '30j', '12m'], true)) {
+        if (! in_array($this->periode, self::PERIODES, true)) {
             $this->periode = '30j';
         }
     }
@@ -42,156 +38,51 @@ class Dashboard extends Component
     {
         Carbon::setLocale('fr');
 
-        $cid   = $this->companyId();
-        $plage = $this->plages();
-        $couts = $this->coutsMoyens();
+        $companyId = (int) Auth::user()->company_id;
+        $repo = new DashboardRepositorie($companyId);
 
-        $actuel = $this->collecter($plage['debut'], $plage['fin']);
-        $passe  = $this->collecter($plage['debutPrec'], $plage['finPrec']);
+        [$debut, $fin, $debutPrec, $finPrec] = $this->plages();
 
-        $kpi  = $this->indicateurs($actuel, $couts);
-        $kpiP = $this->indicateurs($passe, $couts);
+        $actuel    = $this->analyser($repo, $debut, $fin);
+        $precedent = $this->analyser($repo, $debutPrec, $finPrec);
 
-        $var = [];
-        foreach (['ca', 'commandes', 'depenses', 'marge', 'resultat'] as $cle) {
-            $var[$cle] = $this->variation($kpi[$cle], $kpiP[$cle]);
-        }
+        $variation  = $this->variation($actuel['kpi']['net'], $precedent['kpi']['net']);
+        $stock      = $this->stock($repo);
+        $tables     = $this->tables($repo);
+        $ouvertes   = $repo->commandesOuvertesAnciennes(2);
+        $reductions = $repo->reductionsEnAttente();
+        $mois       = $this->projectionMois($repo);
 
-        $mois  = $this->projectionMois();
-        $stock = $this->stock();
+        $produitsTop = $this->produitsTop($actuel);
+        $partTop     = $this->partTop($produitsTop);
 
-        // Top produits et concentration des ventes
-        $produitsTop   = $actuel['produits']->sortByDesc('ca')->take(5)->values();
-        $totalBrut     = (float) $actuel['produits']->sum('ca');
-        $concentration = $totalBrut > 0
-            ? (float) ($produitsTop->first()?->ca ?? 0) / $totalBrut
-            : 0.0;
-
-        // Heures de pointe (nombre de commandes par heure)
-        $heures = array_fill(0, 24, 0);
-        foreach ($actuel['ventes'] as $v) {
-            $heures[$v->date->hour]++;
-        }
-
-        // Répartition par catégorie
-        $noms = Categorie::where('company_id', $cid)->pluck('name', 'id');
-        $parCategorie = $actuel['produits']
-            ->groupBy(fn ($l) => (int) ($l->categorie_id ?? 0))
-            ->map(fn ($g) => (float) $g->sum('ca'))
-            ->sortDesc()
-            ->take(6);
+        $indicateurs = $this->indicateurs($actuel, $stock, $tables, $ouvertes, $reductions, $partTop, $variation);
+        $diagnostic  = $this->diagnostic($indicateurs);
 
         $charts = [
-            'evolution' => $this->serie($plage['debut'], $plage['fin'], $actuel['ventes'], $actuel['depenses']),
-            'categories' => [
-                'labels' => $parCategorie->keys()->map(fn ($id) => $noms[$id] ?? 'Sans catégorie')->values()->all(),
-                'values' => $parCategorie->values()->map(fn ($v) => round($v))->values()->all(),
-            ],
-            'produits' => [
-                'labels' => $produitsTop->map(fn ($l) => $l->name ?? 'Produit supprimé')->values()->all(),
-                'values' => $produitsTop->map(fn ($l) => round((float) $l->ca))->values()->all(),
-            ],
-            'heures' => [
-                'labels' => array_map(fn ($h) => sprintf('%02dh', $h), range(0, 23)),
-                'values' => $heures,
-            ],
-        ];
-
-        // Opérations
-        $enCours = Precommande::where('company_id', $cid)
-            ->where('status', false)
-            ->where('created_at', '<', now()->subHours(2))
-            ->count();
-
-        $reductions = Reduction::where('status', false)
-            ->whereHas('precommande', fn ($q) => $q->where('company_id', $cid))
-            ->count();
-
-        // Personnel
-        $roles = User::where('company_id', $cid)
-            ->selectRaw('role_id, COUNT(*) AS n')
-            ->groupBy('role_id')
-            ->pluck('n', 'role_id');
-
-        $personnel = [
-            'total'         => (int) $roles->sum(),
-            'gerants'       => (int) ($roles[RoleEnum::GERANT] ?? 0),
-            'comptoiristes' => (int) ($roles[RoleEnum::RECEPTEUR] ?? 0),
-            'serveurs'      => (int) ($roles[RoleEnum::SERVER] ?? 0),
-        ];
-
-        $serveurs = $this->topServeurs($actuel['ventes']);
-
-        // Analyse intelligente
-        $insights = $this->insights([
-            'ca'            => $kpi['ca'],
-            'commandes'     => $kpi['commandes'],
-            'marge'         => $kpi['marge'],
-            'depenses'      => $kpi['depenses'],
-            'var_ca'        => $var['ca'],
-            'ruptures'      => $stock['ruptures'],
-            'faibles'       => $stock['faibles']->count(),
-            'dormants'      => $stock['dormants'],
-            'en_cours'      => $enCours,
-            'reductions'    => $reductions,
-            'heures'        => $heures,
-            'concentration' => $concentration,
-            'top_nom'       => $produitsTop->first()?->name,
-        ]);
-        $sante = $this->sante($insights);
-
-        // Cartes d'indicateurs
-        $cartes = [
-            [
-                'icone' => 'bi-cash-stack', 'label' => "Chiffre d'affaires net",
-                'valeur' => $this->fmt($kpi['ca']), 'unite' => 'Fc',
-                'variation' => $var['ca'], 'inverse' => false,
-                'sous' => 'Brut : ' . $this->fmt($kpi['brut']) . ' Fc',
-            ],
-            [
-                'icone' => 'bi-receipt', 'label' => 'Commandes',
-                'valeur' => $this->fmt($kpi['commandes']), 'unite' => '',
-                'variation' => $var['commandes'], 'inverse' => false,
-                'sous' => $this->fmt($kpi['articles']) . ' articles · panier moyen ' . $this->fmt($kpi['panier']) . ' Fc',
-            ],
-            [
-                'icone' => 'bi-wallet2', 'label' => 'Dépenses',
-                'valeur' => $this->fmt($kpi['depenses']), 'unite' => 'Fc',
-                'variation' => $var['depenses'], 'inverse' => true,
-                'sous' => 'Une hausse est un point d\'attention',
-            ],
-            [
-                'icone' => 'bi-graph-up', 'label' => 'Marge brute estimée',
-                'valeur' => $this->fmt($kpi['marge']), 'unite' => 'Fc',
-                'variation' => $var['marge'], 'inverse' => false,
-                'sous' => 'Coût des produits : ' . $this->fmt($kpi['cout']) . ' Fc',
-            ],
-            [
-                'icone' => 'bi-bank', 'label' => 'Résultat net estimé',
-                'valeur' => $this->fmt($kpi['resultat']), 'unite' => 'Fc',
-                'variation' => $var['resultat'], 'inverse' => false,
-                'sous' => 'Marge brute après dépenses',
-            ],
-            [
-                'icone' => 'bi-calendar-check', 'label' => 'Projection fin de mois',
-                'valeur' => $this->fmt($mois['projection']), 'unite' => 'Fc',
-                'variation' => false, 'inverse' => false,
-                'sous' => 'Réalisé ce mois : ' . $this->fmt($mois['mtd']) . ' Fc',
+            'evolution' => $this->serie($debut, $fin, $actuel),
+            'jours'     => $this->parJourSemaine($actuel['ventes']),
+            'produits'  => [
+                'labels' => $produitsTop->take(5)->pluck('name')->all(),
+                'values' => $produitsTop->take(5)->map(fn ($p) => round($p->ca))->values()->all(),
             ],
         ];
 
         return view('livewire.dashboard.dashboard', [
-            'cartes'        => $cartes,
-            'insights'      => $insights,
-            'sante'         => $sante,
-            'charts'        => $charts,
-            'stock'         => $stock,
-            'personnel'     => $personnel,
-            'serveurs'      => $serveurs,
-            'enCours'       => $enCours,
-            'reductions'    => $reductions,
-            'produitsTop'   => $produitsTop,
-            'concentration' => $concentration,
+            'cartes'      => $this->cartes($actuel, $precedent, $mois),
+            'indicateurs' => $indicateurs,
+            'diagnostic'  => $diagnostic,
+            'lectures'    => $this->lectures($actuel, $stock, $tables, $variation),
+            'creances'    => $this->creancesARecouvrer($repo, $actuel),
+            'serveurs'    => $this->serveurs($actuel, $companyId),
+            'produitsTop' => $produitsTop->take(5),
+            'stock'       => $stock,
+            'tables'      => $tables,
+            'ouvertes'    => $ouvertes,
+            'reductions'  => $reductions,
+            'mois'        => $mois,
+            'charts'      => $charts,
+            'funnel'      => $actuel['funnel'],
         ]);
     }
 
@@ -204,161 +95,532 @@ class Dashboard extends Component
     {
         $fin = now();
 
-        if ($this->periode === '12m') {
-            $debut = now()->subMonths(11)->startOfMonth();
-        } else {
-            $jours = $this->periode === '7j' ? 7 : 30;
-            $debut = now()->subDays($jours - 1)->startOfDay();
-        }
+        $debut = match ($this->periode) {
+            'jour'  => now()->startOfDay(),
+            '7j'    => now()->subDays(6)->startOfDay(),
+            '12m'   => now()->subMonths(11)->startOfMonth(),
+            default => now()->subDays(29)->startOfDay(),
+        };
 
         $duree = (int) abs($debut->diffInSeconds($fin));
 
-        return [
-            'debut'     => $debut,
-            'fin'       => $fin,
-            'debutPrec' => $debut->copy()->subSeconds($duree),
-            'finPrec'   => $debut->copy(),
-        ];
-    }
-
-    /** Toutes les données brutes d'une période, une seule fois. */
-    private function collecter(Carbon $debut, Carbon $fin): array
-    {
-        return [
-            'ventes'   => $this->ventes($debut, $fin),
-            'produits' => $this->produitsVendus($debut, $fin),
-            'depenses' => $this->depenses($debut, $fin),
-        ];
+        return [$debut, $fin, $debut->copy()->subSeconds($duree), $debut->copy()];
     }
 
     /* ==========================================================
-     |  Requêtes
+     |  Analyse d'une période
      ========================================================== */
 
-    /**
-     * Une ligne par précommande confirmée : montant brut, réduction, net.
-     * Les réductions sont agrégées dans une sous-requête pour ne pas
-     * multiplier les lignes de commande.
-     */
-    private function ventes(Carbon $debut, Carbon $fin): Collection
+    private function analyser(DashboardRepositorie $repo, Carbon $debut, Carbon $fin): array
     {
-        $c  = $this->t(Commande::class);
-        $p  = $this->t(Precommande::class);
-        $pr = $this->t(Produit::class);
-        $r  = $this->t(Reduction::class);
+        $toutes   = $repo->precommandes($debut, $fin);
+        $ventes   = $toutes->filter(fn ($p) => (bool) $p->status)->map(fn ($p) => $this->vente($p))->values();
+        $produits = $repo->produitsVendus($debut, $fin);
+        $couts    = $repo->coutsAchat();
+        $depRows  = $repo->depenses($debut, $fin);
 
-        $reductions = DB::table($r)
-            ->selectRaw('precommande_id, MAX(pourcentage) AS pct')
-            ->groupBy('precommande_id');
+        $cout = 0.0;
+        $qtyTotale = 0.0;
+        $qtyCouverte = 0.0;
 
-        $select = 'p.id, p.created_at, COALESCE(r.pct, 0) AS pct,
-                   SUM(c.quantity_commande * ' . $this->expressionPrix() . ') AS brut,
-                   SUM(c.quantity_commande) AS articles';
-        $groupes = ['p.id', 'p.created_at', 'r.pct'];
+        foreach ($produits as $p) {
+            $qty = (float) $p->qty;
+            $qtyTotale += $qty;
 
-        if ($this->colonneUserExiste()) {
-            $select .= ', p.user_id';
-            $groupes[] = 'p.user_id';
+            if ($couts->has($p->id)) {
+                $qtyCouverte += $qty;
+                $cout += $qty * (float) $couts->get($p->id);
+            }
         }
 
-        return DB::table("$c as c")
-            ->join("$p as p", 'p.id', '=', 'c.precommande_id')
-            ->leftJoin("$pr as pr", 'pr.id', '=', 'c.produit_id')
-            ->leftJoinSub($reductions, 'r', 'r.precommande_id', '=', 'p.id')
-            ->where('c.company_id', $this->companyId())
-            ->where('p.status', true)
-            ->whereBetween('p.created_at', [$debut, $fin])
-            ->groupBy($groupes)
-            ->selectRaw($select)
-            ->get()
-            ->map(function ($l) {
-                $brut = (float) $l->brut;
-                $pct  = (float) $l->pct;
-
-                return (object) [
-                    'id'       => $l->id,
-                    'date'     => Carbon::parse($l->created_at),
-                    'brut'     => $brut,
-                    'pct'      => $pct,
-                    'net'      => $brut * (1 - $pct / 100),
-                    'articles' => (int) $l->articles,
-                    'user_id'  => $l->user_id ?? null,
-                ];
-            });
-    }
-
-    /** Ventes agrégées par produit sur la période. */
-    private function produitsVendus(Carbon $debut, Carbon $fin): Collection
-    {
-        $c  = $this->t(Commande::class);
-        $p  = $this->t(Precommande::class);
-        $pr = $this->t(Produit::class);
-
-        return DB::table("$c as c")
-            ->join("$p as p", 'p.id', '=', 'c.precommande_id')
-            ->leftJoin("$pr as pr", 'pr.id', '=', 'c.produit_id')
-            ->where('c.company_id', $this->companyId())
-            ->where('p.status', true)
-            ->whereBetween('p.created_at', [$debut, $fin])
-            ->whereNotNull('c.produit_id')
-            ->groupBy('c.produit_id', 'pr.name', 'pr.categorie_id')
-            ->selectRaw('c.produit_id, pr.name, pr.categorie_id,
-                         SUM(c.quantity_commande) AS qte,
-                         SUM(c.quantity_commande * ' . $this->expressionPrix() . ') AS ca')
-            ->get();
-    }
-
-    private function depenses(Carbon $debut, Carbon $fin): Collection
-    {
-        return Depense::query()
-            ->where('company_id', $this->companyId())
-            ->whereBetween('created_at', [$debut, $fin])
-            ->get(['montant', 'created_at']);
-    }
-
-    /** Coût d'achat moyen par produit, d'après l'historique d'approvisionnement. */
-    private function coutsMoyens(): Collection
-    {
-        return DB::table($this->t(HystoryProduct::class))
-            ->where('company_id', $this->companyId())
-            ->whereNotNull('prix_achat')
-            ->groupBy('product_id')
-            ->selectRaw('product_id, AVG(prix_achat) AS cout')
-            ->pluck('cout', 'product_id');
-    }
-
-    /* ==========================================================
-     |  Indicateurs
-     ========================================================== */
-
-    private function indicateurs(array $d, Collection $couts): array
-    {
-        $ca        = (float) $d['ventes']->sum('net');
-        $brut      = (float) $d['ventes']->sum('brut');
-        $commandes = $d['ventes']->count();
-        $articles  = (int) $d['ventes']->sum('articles');
-
-        $cout = (float) $d['produits']->sum(
-            fn ($l) => (float) $l->qte * (float) ($couts[$l->produit_id] ?? 0)
-        );
-
-        $depenses = (float) $d['depenses']->sum('montant');
-        $marge    = $ca - $cout;
+        $brut      = (float) $ventes->sum('brut');
+        $remises   = (float) $ventes->sum('remise');
+        $net       = (float) $ventes->sum('net');
+        $creances  = (float) $ventes->sum('creance');
+        $encaisse  = (float) $ventes->sum('encaisse');
+        $tickets   = $ventes->count();
+        $facturees = $ventes->where('facturee', true)->count();
+        $depenses  = (float) $depRows->sum('montant');
+        $marge     = $net - $cout;
 
         return [
-            'ca'        => $ca,
-            'brut'      => $brut,
-            'commandes' => $commandes,
-            'articles'  => $articles,
-            'panier'    => $commandes > 0 ? $ca / $commandes : 0.0,
-            'cout'      => $cout,
-            'depenses'  => $depenses,
-            'marge'     => $marge,
-            'resultat'  => $marge - $depenses,
+            'kpi' => [
+                'brut'             => $brut,
+                'remises'          => $remises,
+                'net'              => $net,
+                'encaisse'         => $encaisse,
+                'creances'         => $creances,
+                'cout'             => $cout,
+                'marge'            => $marge,
+                'depenses'         => $depenses,
+                'resultat'         => $marge - $depenses,
+                'tickets'          => $tickets,
+                'articles'         => (int) $ventes->sum('articles'),
+                'panier'           => $tickets > 0 ? $net / $tickets : 0.0,
+                'taux_remise'      => $brut > 0 ? $remises / $brut * 100 : 0.0,
+                'taux_creance'     => $net > 0 ? $creances / $net * 100 : 0.0,
+                'taux_facturation' => $tickets > 0 ? $facturees / $tickets * 100 : null,
+                'couverture'       => $qtyTotale > 0 ? $qtyCouverte / $qtyTotale * 100 : null,
+            ],
+            'funnel'       => $this->funnel($toutes, $ventes),
+            'toutes'       => $toutes,
+            'ventes'       => $ventes,
+            'produits'     => $produits,
+            'depensesRows' => $depRows,
         ];
     }
 
-    /** Variation en pourcentage ; null si la période précédente est vide. */
+    /** Normalise une précommande confirmée : brut, remise, net, encaissé et créance. */
+    private function vente(object $p): object
+    {
+        $brut    = (float) $p->brut;
+        $remise  = $brut * (float) $p->remise_pct / 100;
+        $net     = $brut - $remise;
+        $aDette  = (int) $p->nb_dettes > 0;
+        $avance  = (float) $p->avance;
+
+        return (object) [
+            'id'        => $p->id,
+            'date'      => Carbon::parse($p->created_at),
+            'server_id' => $p->server_id,
+            'table_id'  => $p->table_id,
+            'brut'      => $brut,
+            'remise'    => $remise,
+            'net'       => $net,
+            'articles'  => (int) $p->articles,
+            'facturee'  => (bool) $p->invoiced,
+            'dette'     => $aDette,
+            'encaisse'  => $aDette ? min($net, $avance) : $net,
+            'creance'   => $aDette ? max(0.0, $net - $avance) : 0.0,
+        ];
+    }
+
+    /** Tunnel de la vente : de la création à la facturation. */
+    private function funnel(Collection $toutes, Collection $ventes): array
+    {
+        return [
+            'creees'        => $toutes->count(),
+            'avec_lignes'   => $toutes->filter(fn ($p) => (int) $p->nb_lignes > 0)->count(),
+            'confirmees'    => $ventes->count(),
+            'facturees'     => $ventes->where('facturee', true)->count(),
+            'non_facturees' => $ventes->where('facturee', false)->count(),
+            'a_credit'      => $ventes->where('dette', true)->count(),
+            'vides'         => $toutes->filter(fn ($p) => (int) $p->nb_lignes === 0)->count(),
+            'en_cours'      => $toutes->filter(fn ($p) => ! (bool) $p->status)->count(),
+        ];
+    }
+
+    /* ==========================================================
+     |  Stock, tables, personnel, créances
+     ========================================================== */
+
+    private function stock(DashboardRepositorie $repo): array
+    {
+        $produits = $repo->produits();
+        $qty30    = $repo->quantitesVendues30j();
+
+        $ruptures = $produits->filter(fn ($p) => (int) $p->quantity <= 0);
+
+        // Manque à gagner journalier : vitesse de vente sur 30 jours × prix de vente
+        $manqueParJour = $ruptures->sum(function ($p) use ($qty30) {
+            $vitesse = ((float) ($qty30->get($p->id) ?? 0)) / 30;
+            return $vitesse * (float) $p->price;
+        });
+
+        return [
+            'nb'          => $produits->count(),
+            'ruptures'    => $ruptures->count(),
+            'noms'        => $ruptures->pluck('name')->take(6)->values()->all(),
+            'faibles'     => $produits->filter(fn ($p) => (int) $p->quantity > 0 && (int) $p->quantity < 5)->count(),
+            'valeur'      => (float) $produits->sum(fn ($p) => (float) $p->quantity * (float) $p->price),
+            'manque_jour' => (float) $manqueParJour,
+        ];
+    }
+
+    private function tables(DashboardRepositorie $repo): array
+    {
+        $t = $repo->tables();
+
+        $occupees = $t->filter(fn ($x) => (bool) $x->status);
+
+        // Occupée sans commande ouverte, ou libre avec une commande ouverte
+        $occupeeSansCommande = $occupees->filter(fn ($x) => (int) $x->commandes_ouvertes === 0)->count();
+        $libreAvecCommande   = $t->filter(fn ($x) => ! (bool) $x->status && (int) $x->commandes_ouvertes > 0)->count();
+
+        return [
+            'total'           => $t->count(),
+            'places'          => (int) $t->sum('places'),
+            'occupees'        => $occupees->count(),
+            'places_occupees' => (int) $occupees->sum('places'),
+            'incoherences'    => $occupeeSansCommande + $libreAvecCommande,
+        ];
+    }
+
+    /** Classement des serveurs (rattachement par server_id). */
+    private function serveurs(array $a, int $companyId): Collection
+    {
+        $total = (float) $a['ventes']->sum('net');
+
+        $groupes = $a['ventes']
+            ->whereNotNull('server_id')
+            ->groupBy('server_id')
+            ->map(fn ($g) => ['ca' => (float) $g->sum('net'), 'tickets' => $g->count()])
+            ->sortByDesc('ca')
+            ->take(6);
+
+        $noms = DB::table('users')
+            ->where('company_id', $companyId)
+            ->whereIn('id', $groupes->keys()->all())
+            ->pluck('name', 'id');
+
+        return $groupes->map(fn ($s, $id) => $s + [
+            'nom'  => $noms->get($id, '—'),
+            'part' => $total > 0 ? $s['ca'] / $total * 100 : 0.0,
+        ]);
+    }
+
+    /** Principales créances de la période, avec le nom du client. */
+    private function creancesARecouvrer(DashboardRepositorie $repo, array $a): Collection
+    {
+        $ventes = $a['ventes']
+            ->filter(fn ($v) => $v->creance > 0)
+            ->sortByDesc('creance')
+            ->take(5)
+            ->values();
+
+        $dettes = $repo->dettes($ventes->pluck('id')->all())->keyBy('precommande_id');
+
+        return $ventes->map(function ($v) use ($dettes) {
+            $d = $dettes->get($v->id);
+
+            return (object) [
+                'id'        => $v->id,
+                'client'    => $d->client_name ?? '—',
+                'telephone' => $d->client_phone ?? '',
+                'creance'   => $v->creance,
+                'date'      => $v->date,
+            ];
+        });
+    }
+
+    /* ==========================================================
+     |  Produits et séries
+     ========================================================== */
+
+    private function produitsTop(array $a): Collection
+    {
+        return $a['produits']
+            ->map(fn ($p) => (object) [
+                'name' => $p->name ?? 'Produit supprimé',
+                'qty'  => (float) $p->qty,
+                'ca'   => (float) $p->ca,
+            ])
+            ->sortByDesc('ca')
+            ->values();
+    }
+
+    /** Part du CA brut du produit le plus vendu. */
+    private function partTop(Collection $produits): ?float
+    {
+        $total = (float) $produits->sum('ca');
+
+        return $total > 0 ? (float) $produits->first()->ca / $total * 100 : null;
+    }
+
+    /** Série CA net / créances / dépenses, par jour (12 mois : par mois). */
+    private function serie(Carbon $debut, Carbon $fin, array $a): array
+    {
+        $mensuel = $this->periode === '12m';
+        $cle = fn (Carbon $d) => $mensuel ? $d->format('Y-m') : $d->format('Y-m-d');
+
+        $ventesParCle = $a['ventes']->groupBy(fn ($v) => $cle($v->date));
+        $depParCle    = $a['depensesRows']->groupBy(fn ($d) => $cle(Carbon::parse($d->created_at)));
+
+        $point = $mensuel ? $debut->copy()->startOfMonth() : $debut->copy()->startOfDay();
+        $pas   = $mensuel ? '1 month' : '1 day';
+
+        $labels = [];
+        $net    = [];
+        $cr     = [];
+        $dep    = [];
+
+        foreach (CarbonPeriod::create($point, $pas, $fin) as $jour) {
+            $k = $cle($jour);
+            $g = $ventesParCle->get($k);
+            $d = $depParCle->get($k);
+
+            $labels[] = $mensuel ? ucfirst($jour->translatedFormat('M Y')) : $jour->format('d/m');
+            $net[]    = round((float) ($g ? $g->sum('net') : 0));
+            $cr[]     = round((float) ($g ? $g->sum('creance') : 0));
+            $dep[]    = round((float) ($d ? $d->sum('montant') : 0));
+        }
+
+        return compact('labels', 'net', 'cr', 'dep');
+    }
+
+    private function parJourSemaine(Collection $ventes): array
+    {
+        $total = array_fill(1, 7, 0.0);
+
+        foreach ($ventes as $v) {
+            $total[(int) $v->date->dayOfWeekIso] += $v->net;
+        }
+
+        return [
+            'labels' => array_values(self::JOURS),
+            'values' => array_map(fn ($x) => round($x), array_values($total)),
+        ];
+    }
+
+    private function parHeure(Collection $ventes): array
+    {
+        $tickets = array_fill(0, 24, 0);
+
+        foreach ($ventes as $v) {
+            $tickets[(int) $v->date->format('G')]++;
+        }
+
+        return [
+            'labels' => array_map(fn ($h) => sprintf('%02dh', $h), range(0, 23)),
+            'values' => $tickets,
+        ];
+    }
+
+    /** CA net du mois en cours, projeté sur le mois entier au rythme actuel. */
+    private function projectionMois(DashboardRepositorie $repo): array
+    {
+        $mtd = (float) $repo->precommandes(now()->startOfMonth(), now())
+            ->filter(fn ($p) => (bool) $p->status)
+            ->map(fn ($p) => $this->vente($p))
+            ->sum('net');
+
+        $jours = now()->day;
+
+        return [
+            'mtd'        => $mtd,
+            'projection' => $jours > 0 ? $mtd / $jours * now()->daysInMonth : 0.0,
+        ];
+    }
+
+    /* ==========================================================
+     |  Indicateurs de fonctionnement
+     ========================================================== */
+
+    private function indicateurs(array $a, array $stock, array $tables, int $ouvertes, int $reductions, ?float $partTop, ?float $variation): Collection
+    {
+        $k = $a['kpi'];
+        $f = $a['funnel'];
+
+        $tauxConfirmation = $f['creees'] > 0 ? $f['confirmees'] / $f['creees'] * 100 : null;
+        $tauxMarge        = $k['net'] > 0 ? $k['marge'] / $k['net'] * 100 : null;
+
+        return collect([
+            $this->indicateur('Taux de confirmation', $tauxConfirmation, 'pct', 90, 75, true,
+                'Part des précommandes créées qui deviennent des ventes encaissées.',
+                'Relancez les commandes ouvertes et supprimez les précommandes abandonnées.'),
+
+            $this->indicateur('Taux de facturation', $k['taux_facturation'], 'pct', 95, 80, true,
+                "Ventes confirmées ayant une facture. Une vente sans facture n'est pas justifiée comptablement.",
+                'Facturez les ventes confirmées restantes depuis la fiche de la commande.'),
+
+            $this->indicateur('Taux de remise', $k['taux_remise'], 'pct', 8, 15, false,
+                "Part du CA brut cédée en réductions. Une remise élevée érode la marge.",
+                'Limitez les réductions aux cas justifiés et validez-les avant application.'),
+
+            $this->indicateur('Créances clients', $k['taux_creance'], 'pct', 5, 15, false,
+                "Part du CA net non encore encaissée. Ce montant reste à recouvrer.",
+                'Relancez les clients listés dans « Créances à recouvrer ».'),
+
+            $this->indicateur('Couverture des coûts', $k['couverture'], 'pct', 95, 70, true,
+                "Part des quantités vendues dont le prix d'achat est connu. Sous ce seuil, la marge est peu fiable.",
+                "Renseignez le prix d'achat à chaque approvisionnement."),
+
+            $this->indicateur('Marge brute', $tauxMarge, 'pct', 30, 15, true,
+                'Part du CA net qui reste après le coût d\'achat des produits vendus.',
+                'Révisez les prix de vente des produits à faible marge.'),
+
+            $this->indicateur('Précommandes vides', (float) $f['vides'], 'count', 0, 3, false,
+                'Précommandes créées sans produit : commandes abandonnées ou erreur de saisie.',
+                'Vérifiez avec les serveurs le processus de création des commandes.'),
+
+            $this->indicateur('Produits en rupture', (float) $stock['ruptures'], 'count', 0, 2, false,
+                'Produits à stock nul. Chaque jour de rupture coûte des ventes.',
+                'Réapprovisionnez en priorité les produits listés dans « Stock ».'),
+
+            $this->indicateur('Dépendance au produit phare', $partTop, 'pct', 25, 40, false,
+                'Part du CA brut du produit le plus vendu. Une forte dépendance fragilise le chiffre d\'affaires.',
+                'Développez les autres produits et sécurisez le stock du produit phare.'),
+
+            $this->indicateur('Tendance du CA net', $variation, 'signed', 0, -10, true,
+                'Évolution du CA net face à la période précédente de même durée.',
+                'Analysez les jours et heures en baisse dans le graphique d\'évolution.'),
+
+            $this->indicateur('Incohérences de tables', (float) $tables['incoherences'], 'count', 0, 2, false,
+                'Tables occupées sans commande ouverte, ou commandes ouvertes sur des tables libres.',
+                'Vérifiez les tables concernées : libérez-les ou rouvrez la commande.'),
+
+            $this->indicateur('Commandes ouvertes depuis plus de 2 h', (float) $ouvertes, 'count', 0, 2, false,
+                'Commandes non confirmées depuis longtemps : risque de ventes oubliées.',
+                'Confirmez ou annulez ces commandes.'),
+
+            $this->indicateur('Réductions en attente', (float) $reductions, 'count', 0, 3, false,
+                'Réductions demandées mais non validées.',
+                'Validez ou refusez les réductions en attente.'),
+        ]);
+    }
+
+    private function indicateur(string $label, ?float $valeur, string $format, float $ok, float $alerte, bool $plusHaut, string $lecture, string $action): array
+    {
+        return [
+            'label'   => $label,
+            'valeur'  => $valeur,
+            'format'  => $format,
+            'statut'  => $this->statut($valeur, $ok, $alerte, $plusHaut),
+            'cible'   => ($plusHaut ? '≥ ' : '≤ ') . $this->nombre($ok) . ($format === 'count' ? '' : ' %'),
+            'lecture' => $lecture,
+            'action'  => $action,
+        ];
+    }
+
+    private function statut(?float $v, float $ok, float $alerte, bool $plusHaut): string
+    {
+        if ($v === null) {
+            return 'neutral';
+        }
+
+        if ($plusHaut) {
+            return $v >= $ok ? 'ok' : ($v >= $alerte ? 'watch' : 'bad');
+        }
+
+        return $v <= $ok ? 'ok' : ($v <= $alerte ? 'watch' : 'bad');
+    }
+
+    /** Score global : bon = 1 point, vigilance = 0,5 point, action = 0. */
+    private function diagnostic(Collection $indicateurs): array
+    {
+        $mesures = $indicateurs->reject(fn ($i) => $i['statut'] === 'neutral');
+
+        if ($mesures->isEmpty()) {
+            return ['score' => null, 'label' => 'Données insuffisantes', 'niveau' => 'neutral', 'couleur' => '#94a3b8', 'mesures' => 0];
+        }
+
+        $points = $mesures->sum(fn ($i) => match ($i['statut']) {
+            'ok'    => 1,
+            'watch' => 0.5,
+            default => 0,
+        });
+
+        $score  = (int) round($points / $mesures->count() * 100);
+        $niveau = $score >= 80 ? 'ok' : ($score >= 50 ? 'watch' : 'bad');
+
+        return [
+            'score'   => $score,
+            'label'   => $score >= 85 ? 'Excellent' : ($score >= 65 ? 'Bon' : ($score >= 40 ? 'À surveiller' : 'Critique')),
+            'niveau'  => $niveau,
+            'couleur' => ['ok' => '#15803d', 'watch' => '#b45309', 'bad' => '#dc2626'][$niveau],
+            'mesures' => $mesures->count(),
+        ];
+    }
+
+    /* ==========================================================
+     |  Cartes financières et lectures
+     ========================================================== */
+
+    private function cartes(array $a, array $p, array $mois): array
+    {
+        $k  = $a['kpi'];
+        $kp = $p['kpi'];
+        $v  = fn (string $cle) => $this->variation($k[$cle], $kp[$cle]);
+
+        return [
+            ['label' => "Chiffre d'affaires brut", 'valeur' => $k['brut'], 'var' => $v('brut'), 'inverse' => false,
+             'icone' => 'bi-cash-coin', 'principal' => false,
+             'sous' => $k['tickets'] . ' ticket(s) · ' . $k['articles'] . ' article(s)'],
+
+            ['label' => 'Remises accordées', 'valeur' => $k['remises'], 'var' => $v('remises'), 'inverse' => true,
+             'icone' => 'bi-percent', 'principal' => false,
+             'sous' => $this->pct($k['taux_remise']) . ' % du brut cédé'],
+
+            ['label' => "Chiffre d'affaires net", 'valeur' => $k['net'], 'var' => $v('net'), 'inverse' => false,
+             'icone' => 'bi-graph-up-arrow', 'principal' => true,
+             'sous' => 'Panier moyen : ' . $this->fmt($k['panier']) . ' Fc'],
+
+            ['label' => 'Encaissé estimé', 'valeur' => $k['encaisse'], 'var' => null, 'inverse' => false,
+             'icone' => 'bi-bank', 'principal' => false,
+             'sous' => 'Ce qui est réellement en caisse'],
+
+            ['label' => 'Créances clients', 'valeur' => $k['creances'], 'var' => null, 'inverse' => true,
+             'icone' => 'bi-person-exclamation', 'principal' => false,
+             'sous' => $this->pct($k['taux_creance']) . ' % du net à recouvrer'],
+
+            ['label' => 'Marge brute', 'valeur' => $k['marge'], 'var' => $v('marge'), 'inverse' => false,
+             'icone' => 'bi-pie-chart', 'principal' => false,
+             'sous' => "Coût d'achat : " . $this->fmt($k['cout']) . ' Fc'],
+
+            ['label' => 'Résultat net estimé', 'valeur' => $k['resultat'], 'var' => $v('resultat'), 'inverse' => false,
+             'icone' => 'bi-clipboard-data', 'principal' => true,
+             'sous' => 'Après ' . $this->fmt($k['depenses']) . ' Fc de dépenses'],
+
+            ['label' => 'Projection fin de mois', 'valeur' => $mois['projection'], 'var' => null, 'inverse' => false,
+             'icone' => 'bi-calendar-check', 'principal' => false,
+             'sous' => 'Réalisé ce mois : ' . $this->fmt($mois['mtd']) . ' Fc'],
+        ];
+    }
+
+    /** Phrases d'explication, rédigées à partir des chiffres de la période. */
+    private function lectures(array $a, array $stock, array $tables, ?float $variation): array
+    {
+        $k = $a['kpi'];
+        $out = [];
+
+        if ($k['net'] > 0) {
+            $out[] = 'Sur 100 Fc de CA net, ' . $this->fmt($k['marge'] / $k['net'] * 100)
+                . " Fc subsistent après le coût d'achat des produits.";
+        }
+
+        $out[] = $k['resultat'] >= 0
+            ? 'Résultat net estimé positif : ' . $this->fmt($k['resultat']) . ' Fc après ' . $this->fmt($k['depenses']) . ' Fc de dépenses.'
+            : 'Résultat net estimé négatif de ' . $this->fmt(abs($k['resultat'])) . " Fc : coûts et dépenses dépassent les ventes.";
+
+        if ($k['creances'] > 0) {
+            $out[] = $this->fmt($k['creances']) . " Fc de ventes sont à crédit : cet argent n'est pas encore en caisse.";
+        }
+
+        if ($variation !== null) {
+            $out[] = $variation >= 0
+                ? 'Le CA net progresse de ' . $this->pct($variation) . ' % par rapport à la période précédente.'
+                : 'Le CA net recule de ' . $this->pct(abs($variation)) . ' % par rapport à la période précédente.';
+        }
+
+        $jours = $this->parJourSemaine($a['ventes']);
+        if (max($jours['values']) > 0) {
+            $i = array_search(max($jours['values']), $jours['values'], true);
+            $out[] = 'Le meilleur jour est le ' . $jours['labels'][$i] . ' avec ' . $this->fmt($jours['values'][$i]) . ' Fc de CA net.';
+        }
+
+        $heures = $this->parHeure($a['ventes']);
+        if ($a['ventes']->count() >= 5 && max($heures['values']) > 0) {
+            $h = array_search(max($heures['values']), $heures['values'], true);
+            $out[] = "Le pic d'activité se situe vers " . sprintf('%02dh', $h)
+                . ' (' . max($heures['values']) . " ticket(s)). Renforcez l'équipe à ce moment.";
+        }
+
+        if ($stock['manque_jour'] > 0) {
+            $out[] = 'Les ruptures actuelles coûtent environ ' . $this->fmt($stock['manque_jour'])
+                . ' Fc de ventes par jour, au rythme des 30 derniers jours.';
+        }
+
+        if ($tables['incoherences'] > 0) {
+            $out[] = $tables['incoherences'] . " table(s) ont un état incohérent avec leurs commandes ouvertes : le plan de salle n'est pas fiable.";
+        }
+
+        return $out;
+    }
+
+    /* ==========================================================
+     |  Utilitaires
+     ========================================================== */
+
     private function variation(float $actuel, float $precedent): ?float
     {
         if ($precedent == 0.0) {
@@ -368,218 +630,18 @@ class Dashboard extends Component
         return round(($actuel - $precedent) / abs($precedent) * 100, 1);
     }
 
-    /** Projection linéaire du chiffre d'affaires du mois en cours. */
-    private function projectionMois(): array
-    {
-        $mtd     = (float) $this->ventes(now()->startOfMonth(), now())->sum('net');
-        $ecoules = now()->day;
-
-        return [
-            'mtd'        => $mtd,
-            'projection' => $ecoules > 0 ? $mtd / $ecoules * now()->daysInMonth : 0.0,
-        ];
-    }
-
-    /** Série temporelle : CA net et dépenses, par jour ou par mois. */
-    private function serie(Carbon $debut, Carbon $fin, Collection $ventes, Collection $depenses): array
-    {
-        $mensuel = $this->periode === '12m';
-
-        $cle = fn (Carbon $d) => $mensuel ? $d->format('Y-m') : $d->format('Y-m-d');
-
-        $debutPas = $mensuel ? $debut->copy()->startOfMonth() : $debut->copy()->startOfDay();
-        $pas      = $mensuel ? '1 month' : '1 day';
-
-        $ventesParCle = $ventes->groupBy(fn ($v) => $cle($v->date));
-        $depParCle    = $depenses->groupBy(fn ($d) => $cle(Carbon::parse($d->created_at)));
-
-        $labels = [];
-        $ca     = [];
-        $dep    = [];
-
-        foreach (CarbonPeriod::create($debutPas, $pas, $fin) as $jour) {
-            $k = $cle($jour);
-
-            $labels[] = $mensuel ? $jour->translatedFormat('M Y') : $jour->format('d/m');
-            $ca[]     = round((float) ($ventesParCle->get($k)?->sum('net') ?? 0));
-            $dep[]    = round((float) ($depParCle->get($k)?->sum('montant') ?? 0));
-        }
-
-        return compact('labels', 'ca', 'dep');
-    }
-
-    /** Stock : ruptures, stock faible, produits dormants, valeur. */
-    private function stock(): array
-    {
-        $cid  = $this->companyId();
-        $base = Produit::query()->where('company_id', $cid);
-
-        $vendusRecemment = DB::table($this->t(Commande::class))
-            ->where('company_id', $cid)
-            ->where('created_at', '>=', now()->subDays(30))
-            ->whereNotNull('produit_id')
-            ->select('produit_id');
-
-        return [
-            'ruptures'    => (clone $base)->where('quantity', '<=', 0)->orderBy('name')->pluck('name'),
-            'faibles'     => (clone $base)->whereBetween('quantity', [1, 4])->orderBy('name')->pluck('name'),
-            'dormants'    => (clone $base)->where('quantity', '>', 0)->whereNotIn('id', $vendusRecemment)->count(),
-            'valeur'      => (float) (clone $base)->sum(DB::raw('quantity * price')),
-            'nb_produits' => (clone $base)->count(),
-        ];
-    }
-
-    /** Classement des serveurs, si les précommandes sont rattachées à un utilisateur. */
-    private function topServeurs(Collection $ventes): Collection
-    {
-        if (! $this->colonneUserExiste()) {
-            return collect();
-        }
-
-        $groupes = $ventes
-            ->whereNotNull('user_id')
-            ->groupBy('user_id')
-            ->map(fn ($g) => [
-                'ca'        => (float) $g->sum('net'),
-                'commandes' => $g->count(),
-            ])
-            ->sortByDesc('ca')
-            ->take(5);
-
-        $noms = User::whereIn('id', $groupes->keys())->pluck('name', 'id');
-
-        return $groupes->map(fn ($s, $id) => $s + ['nom' => $noms[$id] ?? '—']);
-    }
-
-    /* ==========================================================
-     |  Analyse intelligente (règles métier)
-     ========================================================== */
-
-    private function insights(array $c): array
-    {
-        $out = [];
-        $ajouter = function (string $niveau, string $icone, string $titre, string $texte) use (&$out) {
-            $out[] = compact('niveau', 'icone', 'titre', 'texte');
-        };
-
-        if ($c['commandes'] === 0) {
-            $ajouter('info', 'bi-hourglass-split', 'Pas encore de ventes',
-                'Aucune commande confirmée sur la période. Les analyses s\'afficheront dès les premières ventes.');
-        }
-
-        if ($c['var_ca'] !== null) {
-            if ($c['var_ca'] >= 10) {
-                $ajouter('success', 'bi-graph-up-arrow', 'Chiffre d\'affaires en hausse',
-                    '+' . $this->pct($c['var_ca']) . ' % par rapport à la période précédente.');
-            } elseif ($c['var_ca'] <= -10) {
-                $ajouter('warning', 'bi-graph-down-arrow', 'Chiffre d\'affaires en baisse',
-                    $this->pct($c['var_ca']) . ' % par rapport à la période précédente. Vérifiez la disponibilité des produits et l\'affluence.');
-            }
-        }
-
-        if ($c['ca'] > 0 && $c['marge'] < 0) {
-            $ajouter('danger', 'bi-exclamation-triangle', 'Marge brute négative',
-                'Le coût d\'achat des produits vendus dépasse le chiffre d\'affaires. Revoyez vos prix de vente ou vos prix d\'achat.');
-        }
-
-        if ($c['ca'] > 0 && ($c['depenses'] / $c['ca']) >= 0.4) {
-            $ajouter('warning', 'bi-wallet2', 'Dépenses élevées',
-                'Les dépenses représentent ' . $this->pct($c['depenses'] / $c['ca'] * 100) . ' % du CA (seuil indicatif : 40 %).');
-        }
-
-        if ($c['ruptures']->isNotEmpty()) {
-            $ajouter('danger', 'bi-x-octagon', $c['ruptures']->count() . ' produit(s) en rupture',
-                'Des ventes sont perdues. Réapprovisionnez en priorité : ' . $c['ruptures']->take(3)->implode(', ') . '.');
-        }
-
-        if ($c['faibles'] > 0) {
-            $ajouter('warning', 'bi-battery-half', $c['faibles'] . ' produit(s) bientôt épuisé(s)',
-                'Moins de 5 unités en stock.');
-        }
-
-        if ($c['dormants'] > 0) {
-            $ajouter('info', 'bi-moon-stars', $c['dormants'] . ' produit(s) en stock sans vente depuis 30 jours',
-                'Pensez à une promotion ou à retirer ces produits du catalogue pour libérer du stock.');
-        }
-
-        if ($c['en_cours'] > 0) {
-            $ajouter('warning', 'bi-clock-history', $c['en_cours'] . ' commande(s) en cours depuis plus de 2 heures',
-                'Vérifiez qu\'elles ne sont pas bloquées ou oubliées.');
-        }
-
-        if ($c['reductions'] > 0) {
-            $ajouter('info', 'bi-percent', $c['reductions'] . ' réduction(s) en attente de validation',
-                'Ces réductions ne sont pas encore appliquées aux commandes concernées.');
-        }
-
-        $max = max($c['heures']);
-        if ($c['commandes'] >= 5 && $max > 0) {
-            $heure = array_search($max, $c['heures'], true);
-            $ajouter('info', 'bi-lightning-charge', 'Pic d\'activité',
-                sprintf('Le plus d\'activité est vers %02dh (%d commande(s)). Renforcez l\'équipe à ce moment.', $heure, $max));
-        }
-
-        if ($c['top_nom'] !== null && $c['concentration'] >= 0.4) {
-            $ajouter('info', 'bi-star', 'Produit phare',
-                '« ' . $c['top_nom'] . ' » représente ' . $this->pct($c['concentration'] * 100) . ' % des ventes. Surveillez son stock en priorité.');
-        }
-
-        $ordre = ['danger' => 0, 'warning' => 1, 'info' => 2, 'success' => 3];
-        usort($out, fn ($a, $b) => $ordre[$a['niveau']] <=> $ordre[$b['niveau']]);
-
-        return $out;
-    }
-
-    private function sante(array $insights): array
-    {
-        $danger  = collect($insights)->where('niveau', 'danger')->count();
-        $warning = collect($insights)->where('niveau', 'warning')->count();
-
-        if ($danger > 0) {
-            return ['label' => 'Attention requise', 'niveau' => 'danger'];
-        }
-
-        if ($warning >= 2) {
-            return ['label' => 'À surveiller', 'niveau' => 'warning'];
-        }
-
-        return ['label' => 'En bonne santé', 'niveau' => 'success'];
-    }
-
-    /* ==========================================================
-     |  Outils
-     ========================================================== */
-
-    /** Expression SQL du prix unitaire : snapshot de la commande si disponible, sinon prix actuel. */
-    private function expressionPrix(): string
-    {
-        return Schema::hasColumn($this->t(Commande::class), 'prix_unitaire')
-            ? 'COALESCE(c.prix_unitaire, pr.price, 0)'
-            : 'COALESCE(pr.price, 0)';
-    }
-
-    private function colonneUserExiste(): bool
-    {
-        return Schema::hasColumn($this->t(Precommande::class), 'user_id');
-    }
-
-    private function t(string $modele): string
-    {
-        return (new $modele)->getTable();
-    }
-
     private function fmt($n): string
     {
         return number_format((float) $n, 0, ',', ' ');
     }
 
-    private function pct(float $v): string
+    private function pct($n): string
     {
-        return rtrim(rtrim(number_format($v, 1, ',', ' '), '0'), ',');
+        return rtrim(rtrim(number_format((float) $n, 1, ',', ' '), '0'), ',');
     }
 
-    private function companyId(): int
+    private function nombre(float $n): string
     {
-        return Auth::user()->id;
+        return number_format($n, 0, ',', ' ');
     }
 }

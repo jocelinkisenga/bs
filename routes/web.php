@@ -66,6 +66,9 @@ Route::middleware(['admin','auth'])->group(function(){
     Route::get('/commande/{id}',[CommandeController::class,'new'])->name('new_commande');
     Route::get('/facture/{id}',[HomeController::class,'facture'])->name('facture');
     Route::get("/rapports",[RapportController::class,'index'])->name('rapports');
+     Route::get('/rapports/export/{format}', [RapportController::class, 'export'])
+        ->whereIn('format', ['csv', 'xlsx'])
+        ->name('rapports.export');
     Route::get("/dailyRapport",[RapportController::class,'daily'])->name('daily-rapport');
     Route::get("/weeklyRapport",[RapportController::class,'monthly'])->name('weekly-rapport');
     Route::get("/monthlyRapport",[RapportController::class,'monthly'])->name('monthly-rapport');

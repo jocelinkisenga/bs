@@ -45,7 +45,7 @@ class Depenses extends Component
         return [
             'user_id' => [
                 'required',
-                Rule::exists(User::class, 'id')->where('company_id', $this->companyId()),
+                Rule::exists(User::class, 'id')->where('user_id', Auth::user()->id )->first(),
             ],
             'motif'   => ['required', 'string', 'max:255'],
             'montant' => ['required', 'numeric', 'min:0.01', 'max:999999999'],
@@ -131,9 +131,7 @@ class Depenses extends Component
         $companyId = $this->companyId();
 
         $depenses = DepenseModel::query()
-            ->with('user')
-            ->where('company_id', $companyId)
-            ->when($this->search !== '', function ($query) {
+            ->with('user')->when($this->search !== '', function ($query) {
                 $term = '%' . $this->search . '%';
 
                 // Groupé entre parenthèses pour ne pas casser le filtre d'entreprise
@@ -145,7 +143,7 @@ class Depenses extends Component
             ->latest()
             ->paginate(10);
 
-        $base = DepenseModel::where('company_id', $companyId);
+        $base = DepenseModel::all();
 
         $stats = [
             'total' => (float) (clone $base)->sum('montant'),
@@ -154,7 +152,7 @@ class Depenses extends Component
                 ->sum('montant'),
         ];
 
-        $beneficiaires = User::where('company_id', $companyId)
+        $beneficiaires = User::where('user_id', $companyId)
             ->orderBy('name')
             ->get(['id', 'name']);
 
@@ -163,7 +161,7 @@ class Depenses extends Component
 
     private function findDepense(int $id): DepenseModel
     {
-        return DepenseModel::where('company_id', $this->companyId())->findOrFail($id);
+        return DepenseModel::findOrFail($id);
     }
 
     private function companyId(): int
